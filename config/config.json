@@ -19,7 +19,7 @@
         "g0v": {
             "name": "g0v政府採購網api",
             "api": {
-                "base_url": "https://pcc.g0v.ronny.tw/api/",
+                "base_url": "https://pcc-api.openfun.app/api/",
                 "endpoints": {
                     "search_title": "searchbytitle?",
                     "search_company": "searchbycompanyname?",
