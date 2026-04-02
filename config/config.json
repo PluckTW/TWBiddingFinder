@@ -1,68 +1,75 @@
 {
-    "keywords": {
-        "by_title": [
-            "細胞", "菌株", "盤式", "微盤", "微孔盤", "微量盤", "微量孔盤",
-            "影像", "螢光", "冷光", "分光", "光譜", "全波長", "高內涵",
-            "吸光", "光學分析", "連續波長", "酵素免疫", "清洗機", "清洗系統", "共軛焦"
-        ],
-        "by_company": [
-            "進階生物", "奇異", "尚博", "博克", "岑祥股份", "金萬林企業", "科羅耐",
-            "尖端先進", "倍晶生技", "豐記", "科光", "正茂", "冷泉港", "侒欣", "慧禾", "萊富"
-        ]
-    },
-    "websites":{
-        "pcc_gov": {
-            "name": "政府採購網",
-            "baseUrl": "https://web.pcc.gov.tw/",
-            "listing_base_url": "https://web.pcc.gov.tw/prkms/tender/common/bulletion/readBulletion"
+        "keywords": {
+                    "by_title": [
+                                    "細胞", "菌株", "盤式", "微盤", "微孔盤", "微量盤", "微量孔盤",
+                                    "影像", "螢光", "冷光", "分光", "光譜", "全波長", "高內涵",
+                                    "吸光", "光學分析", "連續波長", "酵素免疫", "清洗機", "清洗系統", "共軛焦"
+                    ],
+                    "by_company": [
+                                    "金萬林企業", "倍晶生技", "侒欣",
+                                    "進階生物", "科羅耐", "冷泉港",
+                                    "岑祥股份",
+                                    "博克", "伯森", "珀金埃爾默",
+                                    "正茂",
+                                    "太暘", "翰新國際", "光成國際", "鴻銘科技", "尖端生物科技",
+                                    "基龍米克斯",
+                                    "尚博",
+                                    "豐記", "科光", "慧禾"
+                    ]
         },
-        "g0v": {
-            "name": "g0v政府採購網api",
-            "api": {
-                "base_url": "https://pcc-api.openfun.app/api/",
-                "endpoints": {
-                    "search_title": "searchbytitle?",
-                    "search_company": "searchbycompanyname?",
-                    "tenders": "tender?"
-                }
-            }
+        "websites":{
+                    "pcc_gov": {
+                                    "name": "政府採購網",
+                                    "baseUrl": "https://web.pcc.gov.tw/",
+                                    "listing_base_url": "https://web.pcc.gov.tw/prkms/tender/common/bulletion/readBulletion"
+                    },
+                    "g0v": {
+                                    "name": "g0v政府採購網api",
+                                    "api": {
+                                                        "base_url": "https://pcc-api.openfun.app/api/",
+                                                        "endpoints": {
+                                                                                "search_title": "searchbytitle?",
+                                                                                "search_company": "searchbycompanyname?",
+                                                                                "tenders": "tender?"
+                                                        }
+                                    }
+                    },
+                    "dcb": {
+                                    "name": "生技中心網頁採購資訊",
+                                    "url": "https://www.dcb.org.tw/purchase_demo?locale=zh-TW"
+                    },
+                    "sinica": {
+                                    "name": "中研採購網",
+                                    "tender_url": "https://srp.sinica.edu.tw/#/tender/inst/00/page/1",
+                                    "awarding_url": "https://srp.sinica.edu.tw/#/awarding/inst/00/page/1",
+                                    "failbids_url": "https://srp.sinica.edu.tw/#/failbids/inst/00/page/1"
+                    }
         },
-        "dcb": {
-            "name": "生技中心網頁採購資訊",
-            "url": "https://www.dcb.org.tw/purchase_demo?locale=zh-TW"
-        },
-        "sinica": {
-            "name": "中研採購網",
-            "tender_url": "https://srp.sinica.edu.tw/#/tender/inst/00/page/1",
-            "awarding_url": "https://srp.sinica.edu.tw/#/awarding/inst/00/page/1",
-            "failbids_url": "https://srp.sinica.edu.tw/#/failbids/inst/00/page/1"
+        "data_to_collect": {
+                    "pcc_gov": {
+                                    "tender_columns": [
+                                                        "date", "brief.title", "brief.category", "job_number",
+                                                        "detail.機關資料:機關名稱", "detail.機關資料:單位名稱",
+                                                        "detail.領投開標:截止投標", "detail.招標資料:招標狀態",
+                                                        "detail.機關資料:聯絡人", "detail.機關資料:聯絡電話",
+                                                        "detail.機關資料:電子郵件信箱", "detail.機關資料:傳真號碼",
+                                                        "detail.採購資料:標的分類", "detail.採購資料:預算金額", "detail.url"
+                                    ],
+                                    "award_columns": [
+                                                        "date", "brief.title", "brief.type", "job_number",
+                                                        "detail.機關資料:機關名稱", "detail.機關資料:單位名稱",
+                                                        "detail.機關資料:聯絡人", "detail.機關資料:聯絡電話",
+                                                        "detail.機關資料:電子郵件信箱", "detail.機關資料:傳真號碼",
+                                                        "detail.決標品項:第1品項:品項名稱", "detail.決標品項:第1品項:得標廠商1:得標廠商",
+                                                        "detail.決標資料:總決標金額", "detail.採購資料:標的分類", "detail.url"
+                                    ],
+                                    "not_award_columns": [
+                                                        "date", "brief.title", "brief.type", "job_number",
+                                                        "detail.無法決標公告:機關名稱", "detail.無法決標公告:單位名稱",
+                                                        "detail.無法決標公告:無法決標的理由", "detail.無法決標公告:聯絡人",
+                                                        "detail.無法決標公告:聯絡電話", "detail.無法決標公告:電子郵件信箱",
+                                                        "detail.無法決標公告:傳真號碼", "detail.無法決標公告:標的分類", "detail.url"
+                                    ]
+                    }
         }
-    },
-    "data_to_collect": {
-        "pcc_gov": {
-            "tender_columns": [
-                "date", "brief.title", "brief.category", "job_number",
-                "detail.機關資料:機關名稱", "detail.機關資料:單位名稱",
-                "detail.領投開標:截止投標", "detail.招標資料:招標狀態",
-                "detail.機關資料:聯絡人", "detail.機關資料:聯絡電話",
-                "detail.機關資料:電子郵件信箱", "detail.機關資料:傳真號碼",
-                "detail.採購資料:標的分類", "detail.採購資料:預算金額", "detail.url"
-            ],
-            "award_columns": [
-                "date", "brief.title", "brief.type", "job_number",
-                "detail.機關資料:機關名稱", "detail.機關資料:單位名稱",
-                "detail.機關資料:聯絡人", "detail.機關資料:聯絡電話",
-                "detail.機關資料:電子郵件信箱", "detail.機關資料:傳真號碼",
-                "detail.決標品項:第1品項:品項名稱", "detail.決標品項:第1品項:得標廠商1:得標廠商",
-                "detail.決標資料:總決標金額", "detail.採購資料:標的分類", "detail.url"
-            ],
-            "not_award_columns": [
-                "date", "brief.title", "brief.type", "job_number",
-                "detail.無法決標公告:機關名稱", "detail.無法決標公告:單位名稱",
-                "detail.無法決標公告:無法決標的理由", "detail.無法決標公告:聯絡人",
-                "detail.無法決標公告:聯絡電話", "detail.無法決標公告:電子郵件信箱",
-                "detail.無法決標公告:傳真號碼", "detail.無法決標公告:標的分類", "detail.url"
-            ]
-        }
-    }
 }
