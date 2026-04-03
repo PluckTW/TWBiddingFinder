@@ -76,3 +76,4 @@ if __name__ == "__main__":
     print(gpt_classification('高解析微區光譜儀'))
     print(gpt_classification('微盤光譜'))
     print(gpt_classification('細胞蛋白'))
+
