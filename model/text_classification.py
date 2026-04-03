@@ -15,7 +15,7 @@ oak = sl.secrets['OPENAI_API_KEY']
 try:
         openai.api_key = oak
 
-except FileNotFoundError:
+except FileNotFoundError:h
         print(f"File not found at {file_path}")
 
 
@@ -67,7 +67,7 @@ def gpt_classification(prompt):
         percentage = int(classification_score) # Convert to integer
         return percentage
 
-except openai.error.OpenAIError as e:
+except openai.OpenAIError as e:
         print(f"AI chat error occurred: {e}")
         return None # Return None in case of an error
 
