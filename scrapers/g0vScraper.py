@@ -47,7 +47,10 @@ class G0vScraper:
         api = f'{self.base_url}{endpoint}query={query}&page={page}'
         json_data = scrapers.utils.request(api).json()
 
-        raw_records_df = pd.DataFrame(json_data['records'])
+        records = json_data.get('records', [])
+        if not records:
+            return full_records
+        raw_records_df = pd.DataFrame(records)
         records_df = raw_records_df[['date', 'filename', 'brief', 'tender_api_url']]
         filtered_df = records_df[records_df['date'] >= self.start_date]
         full_records = pd.concat([full_records, filtered_df], ignore_index=True)
@@ -56,7 +59,10 @@ class G0vScraper:
             page += 1
             api = f'{self.base_url}{endpoint}query={query}&page={page}'
             json_data = scrapers.utils.request(api).json()
-            raw_records_df = pd.DataFrame(json_data['records'])
+            records = json_data.get('records', [])
+            if not records:
+                break
+            raw_records_df = pd.DataFrame(records)
             records_df = raw_records_df[['date', 'filename', 'brief', 'tender_api_url']]
             filtered_df = records_df[records_df['date'] >= self.start_date]
             full_records = pd.concat([full_records, filtered_df], ignore_index=True)
