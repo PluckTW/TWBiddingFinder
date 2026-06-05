@@ -64,12 +64,15 @@ def gpt_classification(prompt):
         )
         # Extract and parse the response
         classification_score = response.choices[0].message.content.strip()
-        percentage = int(classification_score) # Convert to integer
+        percentage = int(float(classification_score))
         return percentage
 
     except openai.OpenAIError as e:
         print(f"AI chat error occurred: {e}")
-        return None # Return None in case of an error
+        return None
+    except (ValueError, AttributeError) as e:
+        print(f"Score parse error: {e}")
+        return None
 
 
 if __name__ == "__main__":
