@@ -72,10 +72,26 @@ _PROVIDER_DEFS = [
 # Name of the provider that produced the most recent successful scores.
 _LAST_PROVIDER = None
 
+# Diagnostics from the most recent score_titles() run, surfaced in the UI so a
+# scoring failure shows *why* (missing keys, auth/quota errors, ...) instead of
+# only a generic warning. print() output goes to Streamlit Cloud logs, which the
+# user rarely sees.
+_LAST_DIAGNOSTICS = {"configured": [], "missing": [], "errors": []}
+
 
 def get_last_provider():
     """Return the provider name used for the latest successful scoring, or None."""
     return _LAST_PROVIDER
+
+
+def get_diagnostics():
+    """Return diagnostics from the latest scoring run.
+
+    {"configured": [provider names with a key],
+     "missing":    [provider names without a key],
+     "errors":     ["provider: message", ...]}
+    """
+    return _LAST_DIAGNOSTICS
 
 
 def _secret(name):
@@ -136,14 +152,25 @@ def _score_chunk(titles, provider):
     """Score a single chunk with one provider. Raises on API error."""
     client = openai.OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
     user_msg = "\n".join(f"{i}. {t}" for i, t in enumerate(titles))
-    response = client.chat.completions.create(
-        model=provider["model"],
-        temperature=0.2,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-    )
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": user_msg},
+    ]
+    # Ask for guaranteed-JSON output; some gateways reject the param, so fall
+    # back to a plain call (the parser already tolerates fenced / prose replies).
+    try:
+        response = client.chat.completions.create(
+            model=provider["model"],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            messages=messages,
+        )
+    except openai.BadRequestError:
+        response = client.chat.completions.create(
+            model=provider["model"],
+            temperature=0.2,
+            messages=messages,
+        )
     raw = response.choices[0].message.content
     return _parse_batch_scores(raw, len(titles))
 
@@ -156,9 +183,14 @@ def score_titles(titles):
     if one raises an API error it is disabled for the rest of this run and the
     next provider is used.
     """
-    global _LAST_PROVIDER
+    global _LAST_PROVIDER, _LAST_DIAGNOSTICS
     titles = list(titles)
     scores = [None] * len(titles)
+
+    # Reset diagnostics for this run: record which providers have keys.
+    configured = [p["name"] for p in _PROVIDER_DEFS if _secret(p["secret"])]
+    missing = [p["name"] for p in _PROVIDER_DEFS if not _secret(p["secret"])]
+    _LAST_DIAGNOSTICS = {"configured": configured, "missing": missing, "errors": []}
 
     # Only send real, non-empty string titles to the API.
     valid = [(i, t.strip()) for i, t in enumerate(titles)
@@ -168,7 +200,9 @@ def score_titles(titles):
 
     providers = _available_providers()
     if not providers:
-        print("No model API keys configured (OPENAI_API_KEY / GEMINI_API_KEY / GROQ_API_KEY).")
+        msg = "未設定任何模型 API 金鑰 (OPENAI_API_KEY / GEMINI_API_KEY / GROQ_API_KEY)。"
+        print(msg)
+        _LAST_DIAGNOSTICS["errors"].append(msg)
         return scores
 
     dead = set()
@@ -184,12 +218,16 @@ def score_titles(titles):
                 chunk_scores = _score_chunk(batch_titles, provider)
             except openai.OpenAIError as e:
                 # Auth/quota/connection issues persist -> stop using this provider.
+                msg = f"{provider['name']}: {e}"
                 print(f"[{provider['name']}] API error, disabling for this run: {e}")
+                _LAST_DIAGNOSTICS["errors"].append(msg)
                 dead.add(provider["name"])
                 continue
             except Exception as e:
                 # Bad/unparseable response -> just try the next provider.
+                msg = f"{provider['name']} (unexpected): {e}"
                 print(f"[{provider['name']}] unexpected error: {e}")
+                _LAST_DIAGNOSTICS["errors"].append(msg)
                 continue
 
             if chunk_scores is not None:
