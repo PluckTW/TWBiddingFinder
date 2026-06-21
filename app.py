@@ -94,8 +94,14 @@ if sl.session_state['scraping_status'] == 'idle':
             tender_score = tenders_df['title'].apply(gpt_classification)
             award_score = awards_df['title'].apply(gpt_classification)
 
-            tenders_df.insert(0, 'score', tender_score) 
-            awards_df.insert(0, 'score', award_score) 
+            tenders_df.insert(0, 'score', tender_score)
+            awards_df.insert(0, 'score', award_score)
+
+            if tenders_df['score'].isna().all() and awards_df['score'].isna().all():
+                sl.warning("⚠️ AI 評分全部失敗（API 連線或金鑰問題），score 欄位將顯示為空，篩選功能暫時無效。")
+
+            tenders_df['score'] = tenders_df['score'].fillna(-1).astype(int)
+            awards_df['score'] = awards_df['score'].fillna(-1).astype(int)
 
 
 

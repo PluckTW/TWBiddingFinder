@@ -20,6 +20,12 @@ except FileNotFoundError:
 
 
 def gpt_classification(prompt):
+    # Scraped titles can be missing (None/NaN) when the source record lacks a
+    # title field. Passing a non-string to the API raises a TypeError that would
+    # crash the whole .apply() batch, so skip these rows up front.
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None
+
     try:
         response = openai.chat.completions.create(
             model='gpt-4.1-mini',
@@ -64,12 +70,19 @@ def gpt_classification(prompt):
         )
         # Extract and parse the response
         classification_score = response.choices[0].message.content.strip()
-        percentage = int(classification_score) # Convert to integer
+        percentage = int(float(classification_score))
         return percentage
 
     except openai.OpenAIError as e:
         print(f"AI chat error occurred: {e}")
-        return None # Return None in case of an error
+        return None
+    except (ValueError, AttributeError) as e:
+        print(f"Score parse error: {e}")
+        return None
+    except Exception as e:
+        # Never let a single bad row crash the whole .apply() batch.
+        print(f"Unexpected classification error: {e}")
+        return None
 
 
 if __name__ == "__main__":
