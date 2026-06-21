@@ -10,7 +10,7 @@ from scrapers.g0vScraper import G0vScraper
 from scrapers.pccScraper import PccScraper
 from data_processing.pcc_g0v_merger import PccG0vMerger
 from config.configLoader import CONFIG_PATH
-from model.text_classification import score_titles, get_last_provider
+from model.text_classification import score_titles, get_last_provider, get_diagnostics
 
 
 
@@ -98,7 +98,16 @@ if sl.session_state['scraping_status'] == 'idle':
             awards_df.insert(0, 'score', award_score)
 
             if tenders_df['score'].isna().all() and awards_df['score'].isna().all():
-                sl.warning("⚠️ AI 評分全部失敗（所有模型 API 連線或金鑰問題），score 欄位將顯示為空，篩選功能暫時無效。")
+                sl.warning("⚠️ AI 評分全部失敗（所有模型 API 連線或金鑰問題），score 欄位顯示為 -1，篩選功能暫時無效。")
+                diag = get_diagnostics()
+                if diag["configured"]:
+                    sl.write(f"已設定金鑰的模型：{', '.join(diag['configured'])}")
+                if diag["missing"]:
+                    sl.write(f"未設定金鑰的模型：{', '.join(diag['missing'])}")
+                if diag["errors"]:
+                    sl.error("實際錯誤訊息：\n" + "\n".join(f"- {e}" for e in diag["errors"]))
+                else:
+                    sl.info("沒有捕捉到 API 錯誤；請確認 Streamlit secrets 內的金鑰名稱為 OPENAI_API_KEY / GEMINI_API_KEY / GROQ_API_KEY，且帳戶有額度。")
             else:
                 provider = get_last_provider()
                 if provider:
