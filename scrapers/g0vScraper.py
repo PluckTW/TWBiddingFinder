@@ -45,7 +45,11 @@ class G0vScraper:
         page = 1
 
         api = f'{self.base_url}{endpoint}query={query}&page={page}'
-        json_data = scrapers.utils.request(api).json()
+        response = scrapers.utils.request(api)
+        if response is None:
+            print(f"g0v: request failed for keyword '{keyword}', skipping.")
+            return full_records
+        json_data = response.json()
 
         records = json_data.get('records', [])
         if not records:
@@ -58,7 +62,11 @@ class G0vScraper:
         while len(filtered_df) == 100:
             page += 1
             api = f'{self.base_url}{endpoint}query={query}&page={page}'
-            json_data = scrapers.utils.request(api).json()
+            response = scrapers.utils.request(api)
+            if response is None:
+                print(f"g0v: pagination request failed at page {page}, stopping.")
+                break
+            json_data = response.json()
             records = json_data.get('records', [])
             if not records:
                 break
@@ -83,23 +91,41 @@ class G0vScraper:
             time.sleep(1)
             api_url = row['tender_api_url']
             filename = row['filename']
-            json_data = scrapers.utils.request(api_url).json()
+
+            response = scrapers.utils.request(api_url)
+            if response is None:
+                print(f"g0v: detail request failed for {filename}, skipping.")
+                continue
+
+            try:
+                json_data = response.json()
+            except Exception as e:
+                print(f"g0v: JSON parse error for {filename}: {e}, skipping.")
+                continue
 
             # find matching record with filename
             records = json_data.get('records', [])
-            matching_record = next((record for record in records if record.get('filename', '') == filename), None)
+            matching_record = next(
+                (record for record in records if record.get('filename', '') == filename), None
+            )
+            if matching_record is None:
+                print(f"g0v: no matching record for {filename}, skipping.")
+                continue
 
-            if row['tender_type'] == '決標公告':
-                award_df = self.write_to_df(matching_record, AWARD_SELECTED_COLUMNS)
-                awards_df = pd.concat([awards_df, award_df], ignore_index=True)
+            try:
+                if row['tender_type'] == '決標公告':
+                    award_df = self.write_to_df(matching_record, AWARD_SELECTED_COLUMNS)
+                    awards_df = pd.concat([awards_df, award_df], ignore_index=True)
 
-            elif row['tender_type'] == '無法決標公告':
-                award_df = self.write_to_df(matching_record, NOT_AWARD_SELECTED_COLUMNS)
-                awards_df = pd.concat([awards_df, award_df], ignore_index=True)
+                elif row['tender_type'] == '無法決標公告':
+                    award_df = self.write_to_df(matching_record, NOT_AWARD_SELECTED_COLUMNS)
+                    awards_df = pd.concat([awards_df, award_df], ignore_index=True)
 
-            else:
-                tender_df = self.write_to_df(matching_record, TENDER_SELECTED_COLUMNS)
-                tenders_df = pd.concat([tenders_df, tender_df], ignore_index=True)
+                else:
+                    tender_df = self.write_to_df(matching_record, TENDER_SELECTED_COLUMNS)
+                    tenders_df = pd.concat([tenders_df, tender_df], ignore_index=True)
+            except Exception as e:
+                print(f"g0v: write_to_df error for {filename}: {e}, skipping.")
 
         return tenders_df, awards_df
     
