@@ -97,21 +97,15 @@ if sl.session_state['scraping_status'] == 'idle':
             tenders_df.insert(0, 'score', tender_score)
             awards_df.insert(0, 'score', award_score)
 
+            # Persist scoring outcome so it survives the rerun() into UI 2.
             if tenders_df['score'].isna().all() and awards_df['score'].isna().all():
-                sl.warning("⚠️ AI 評分全部失敗（所有模型 API 連線或金鑰問題），score 欄位顯示為 -1，篩選功能暫時無效。")
-                diag = get_diagnostics()
-                if diag["configured"]:
-                    sl.write(f"已設定金鑰的模型：{', '.join(diag['configured'])}")
-                if diag["missing"]:
-                    sl.write(f"未設定金鑰的模型：{', '.join(diag['missing'])}")
-                if diag["errors"]:
-                    sl.error("實際錯誤訊息：\n" + "\n".join(f"- {e}" for e in diag["errors"]))
-                else:
-                    sl.info("沒有捕捉到 API 錯誤；請確認 Streamlit secrets 內的金鑰名稱為 OPENAI_API_KEY / GEMINI_API_KEY / GROQ_API_KEY，且帳戶有額度。")
+                sl.session_state['score_failed'] = True
+                sl.session_state['score_diag'] = get_diagnostics()
+                sl.session_state['score_provider'] = None
             else:
-                provider = get_last_provider()
-                if provider:
-                    sl.write(f"✅ 評分模型：{provider}")
+                sl.session_state['score_failed'] = False
+                sl.session_state['score_diag'] = None
+                sl.session_state['score_provider'] = get_last_provider()
 
             tenders_df['score'] = tenders_df['score'].fillna(-1).astype(int)
             awards_df['score'] = awards_df['score'].fillna(-1).astype(int)
@@ -138,7 +132,23 @@ if sl.session_state['scraping_status'] == 'idle':
 else:
     # Title
     sl.markdown("<h2 style='text-align: center;'>Moldev相關標案下載</h2>", unsafe_allow_html=True)
-    
+
+    # Show AI scoring outcome (persisted from the scraping run so it survives rerun).
+    if sl.session_state.get('score_failed'):
+        sl.warning("⚠️ AI 評分全部失敗（所有模型 API 連線或金鑰問題），score 欄位顯示為 -1，篩選功能暫時無效。")
+        diag = sl.session_state.get('score_diag') or {}
+        if diag.get("configured"):
+            sl.write(f"已設定金鑰的模型：{', '.join(diag['configured'])}")
+        if diag.get("missing"):
+            sl.write(f"未設定金鑰的模型：{', '.join(diag['missing'])}")
+        if diag.get("errors"):
+            sl.error("實際錯誤訊息：\n" + "\n".join(f"- {e}" for e in diag["errors"]))
+        else:
+            sl.info("沒有捕捉到 API 錯誤；請確認 Streamlit secrets 內的金鑰名稱為 "
+                    "OPENAI_API_KEY / GEMINI_API_KEY / GROQ_API_KEY，且帳戶有額度。")
+    elif sl.session_state.get('score_provider'):
+        sl.write(f"✅ 評分模型：{sl.session_state['score_provider']}")
+
     # Function to toggle preview visibility
     def toggle_preview():
         # Toggle the state of the preview flag in session state
