@@ -10,7 +10,7 @@ from scrapers.g0vScraper import G0vScraper
 from scrapers.pccScraper import PccScraper
 from data_processing.pcc_g0v_merger import PccG0vMerger
 from config.configLoader import CONFIG_PATH
-from model.text_classification import gpt_classification
+from model.text_classification import score_titles, get_last_provider
 
 
 
@@ -89,16 +89,20 @@ if sl.session_state['scraping_status'] == 'idle':
             # Clean duplicates
             delete_duplicates(tenders_df, awards_df)
 
-            # Add AI score
+            # Add AI score (batch scoring with automatic model fallback)
             sl.write("Calculating Relevance...")
-            tender_score = tenders_df['title'].apply(gpt_classification)
-            award_score = awards_df['title'].apply(gpt_classification)
+            tender_score = score_titles(tenders_df['title'].tolist())
+            award_score = score_titles(awards_df['title'].tolist())
 
             tenders_df.insert(0, 'score', tender_score)
             awards_df.insert(0, 'score', award_score)
 
             if tenders_df['score'].isna().all() and awards_df['score'].isna().all():
-                sl.warning("⚠️ AI 評分全部失敗（API 連線或金鑰問題），score 欄位將顯示為空，篩選功能暫時無效。")
+                sl.warning("⚠️ AI 評分全部失敗（所有模型 API 連線或金鑰問題），score 欄位將顯示為空，篩選功能暫時無效。")
+            else:
+                provider = get_last_provider()
+                if provider:
+                    sl.write(f"✅ 評分模型：{provider}")
 
             tenders_df['score'] = tenders_df['score'].fillna(-1).astype(int)
             awards_df['score'] = awards_df['score'].fillna(-1).astype(int)
