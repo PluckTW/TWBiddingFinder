@@ -91,8 +91,22 @@ if sl.session_state['scraping_status'] == 'idle':
 
             # Add AI score (batch scoring with automatic model fallback)
             sl.write("Calculating Relevance...")
-            tender_score = score_titles(tenders_df['title'].tolist())
-            award_score = score_titles(awards_df['title'].tolist())
+
+            # ── Debug: inspect titles before scoring ──────────────────────
+            tender_titles = tenders_df['title'].tolist() if 'title' in tenders_df.columns else []
+            award_titles  = awards_df['title'].tolist()  if 'title' in awards_df.columns  else []
+            valid_tender = [t for t in tender_titles if isinstance(t, str) and t.strip()]
+            valid_award  = [t for t in award_titles  if isinstance(t, str) and t.strip()]
+            sl.write(f"🔍 待評分：招標 {len(valid_tender)}/{len(tender_titles)} 筆有效；"
+                     f"決標 {len(valid_award)}/{len(award_titles)} 筆有效")
+            if valid_tender:
+                sl.write("招標 title 範例：" + " | ".join(valid_tender[:3]))
+            if valid_award:
+                sl.write("決標 title 範例：" + " | ".join(valid_award[:3]))
+            # ─────────────────────────────────────────────────────────────
+
+            tender_score = score_titles(tender_titles)
+            award_score  = score_titles(award_titles)
 
             tenders_df.insert(0, 'score', tender_score)
             awards_df.insert(0, 'score', award_score)
