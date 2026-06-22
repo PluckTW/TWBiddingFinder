@@ -6,10 +6,12 @@
 # primary model is down / out of quota the scoring automatically falls back to a
 # cheaper backup model.
 #
-# Configure whichever keys you have in Streamlit secrets:
-#   GROQ_API_KEY   = "..."           # primary  -> llama-3.1-8b-instant (free, fast)
-#   GEMINI_API_KEY = "..."           # fallback -> Google gemini-2.0-flash
-#   OPENAI_API_KEY = "sk-..."        # fallback -> gpt-4.1-mini
+# Configure whichever keys you have in Streamlit secrets. Each provider's
+# concrete model is auto-discovered at runtime (newest matching lightweight
+# model), so the names below are just the defaults used if discovery fails:
+#   GROQ_API_KEY   = "..."           # primary  -> Groq lightweight llama (free, fast)
+#   GEMINI_API_KEY = "..."           # fallback -> Google gemini flash
+#   OPENAI_API_KEY = "sk-..."        # fallback -> gpt mini
 import json
 import re
 import openai
@@ -58,14 +60,28 @@ _SYSTEM_PROMPT = (
 
 # Provider chain, tried in order. base_url=None uses OpenAI's default endpoint;
 # the others are OpenAI-compatible gateways.
+#
+# "model"  = hardcoded default, used only if live discovery fails.
+# "prefer" = ordered regex patterns; at runtime we query the provider's live
+#            model list and pick the newest id matching the highest-priority
+#            pattern, so when a provider rotates model versions (e.g. Groq
+#            replacing llama-3.1-8b-instant with a newer light model) the app
+#            follows along automatically without a code change.
 _PROVIDER_DEFS = [
-    {"name": "Groq (llama-3.1-8b-instant)", "secret": "GROQ_API_KEY",
-     "model": "llama-3.1-8b-instant", "base_url": "https://api.groq.com/openai/v1"},
-    {"name": "Gemini (gemini-2.0-flash)", "secret": "GEMINI_API_KEY",
+    {"name": "Groq", "secret": "GROQ_API_KEY",
+     "model": "llama-3.1-8b-instant",
+     "base_url": "https://api.groq.com/openai/v1",
+     "prefer": [r"llama-?[\d.]+-8b-instant", r"llama.*8b.*instant",
+                r"llama.*8b", r"instant", r"gemma2?-9b"]},
+    {"name": "Gemini", "secret": "GEMINI_API_KEY",
      "model": "gemini-2.0-flash",
-     "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"},
-    {"name": "OpenAI (gpt-4.1-mini)", "secret": "OPENAI_API_KEY",
-     "model": "gpt-4.1-mini", "base_url": None},
+     "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+     "prefer": [r"^gemini-[\d.]+-flash-lite$", r"^gemini-[\d.]+-flash$",
+                r"flash-lite", r"[\d.]+-flash$", r"flash"]},
+    {"name": "OpenAI", "secret": "OPENAI_API_KEY",
+     "model": "gpt-4.1-mini", "base_url": None,
+     "prefer": [r"^gpt-[\d.]+-mini$", r"^gpt-4o-mini$",
+                r"gpt-.*-mini$", r"nano", r"mini"]},
 ]
 
 # Name of the provider that produced the most recent successful scores.
@@ -109,6 +125,45 @@ def _available_providers():
     return providers
 
 
+# Resolved model id per provider label, cached for the session so we query each
+# provider's model list at most once.
+_MODEL_CACHE = {}
+
+
+def _resolve_model(provider):
+    """Pick the model to use for a provider.
+
+    Queries the provider's live /models list and returns the newest id matching
+    the highest-priority preference pattern. Falls back to the hardcoded default
+    if discovery fails or nothing matches. Cached per provider for the session.
+    """
+    label = provider["name"]
+    if label in _MODEL_CACHE:
+        return _MODEL_CACHE[label]
+
+    default = provider["model"]
+    try:
+        client = openai.OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
+        # Strip any "models/" prefix (Gemini returns ids like "models/gemini-...").
+        ids = [m.id.split("/")[-1] for m in client.models.list().data]
+    except Exception as e:
+        print(f"[{label}] model discovery failed, using default '{default}': {e}")
+        return default
+
+    chosen = default
+    for pattern in provider.get("prefer", []):
+        matches = [m for m in ids if re.search(pattern, m, re.I)]
+        if matches:
+            # Highest id sorts last -> reverse to prefer the newest-looking one.
+            chosen = sorted(matches, reverse=True)[0]
+            break
+
+    _MODEL_CACHE[label] = chosen
+    if chosen != default:
+        print(f"[{label}] auto-selected model '{chosen}' (default was '{default}')")
+    return chosen
+
+
 def _parse_batch_scores(raw, n):
     """Parse a model response into a list of n scores (ints or None)."""
     if not raw:
@@ -150,6 +205,7 @@ def _parse_batch_scores(raw, n):
 def _score_chunk(titles, provider):
     """Score a single chunk with one provider. Raises on API error."""
     client = openai.OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
+    model = _resolve_model(provider)
     user_msg = "\n".join(f"{i}. {t}" for i, t in enumerate(titles))
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
@@ -159,14 +215,14 @@ def _score_chunk(titles, provider):
     # back to a plain call (the parser already tolerates fenced / prose replies).
     try:
         response = client.chat.completions.create(
-            model=provider["model"],
+            model=model,
             temperature=0.2,
             response_format={"type": "json_object"},
             messages=messages,
         )
     except openai.BadRequestError:
         response = client.chat.completions.create(
-            model=provider["model"],
+            model=model,
             temperature=0.2,
             messages=messages,
         )
@@ -230,7 +286,7 @@ def score_titles(titles):
                 continue
 
             if chunk_scores is not None:
-                _LAST_PROVIDER = provider["name"]
+                _LAST_PROVIDER = f"{provider['name']} ({_resolve_model(provider)})"
                 break
 
         if chunk_scores:
