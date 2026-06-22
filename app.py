@@ -188,14 +188,14 @@ else:
         # Download buttons for tender and award data
         filtered_tender_filename = f"{today_date}_filtered_tender_data.csv"
         sl.download_button(
-            label="下載招標資料 CSV",
+            label="下載招標資料 CSV (AI篩選)",
             data=tender_csv,
             file_name=filtered_tender_filename,
             mime="text/csv"
         )
         filtered_award_filename = f"{today_date}_filtered_award_data.csv"
         sl.download_button(
-            label="下載招標資料 CSV",
+            label="下載決標資料 CSV (AI篩選)",
             data=award_csv,
             file_name=filtered_award_filename,
             mime="text/csv"
