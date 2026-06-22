@@ -131,24 +131,36 @@ with tab1:
                 _sp = sl.session_state["spreadsheet"]
                 _run_id = str(uuid.uuid4())
                 _ts = datetime.now(_tz_taipei).isoformat()
-                try:
-                    with sl.spinner("同步至 Google Sheets…"):
-                        t_new = sheets_sync.append_new_records(_sp, tenders_df, "Tenders_RAW", _run_id, _ts)
-                        a_new = sheets_sync.append_new_records(_sp, awards_df,  "Awards_RAW",  _run_id, _ts)
-                        sheets_sync.append_run_log(_sp, {
-                            "run_id":           _run_id,
-                            "run_at":           _ts,
-                            "start_date":       formatted_date,
-                            "end_date":         int(today_date.strftime("%Y%m%d")),
-                            "tenders_scraped":  len(tenders_df),
-                            "awards_scraped":   len(awards_df),
-                            "tenders_new":      t_new,
-                            "awards_new":       a_new,
-                            "ai_provider":      sl.session_state.get("score_provider") or "FAILED",
-                            "score_failed":     sl.session_state.get("score_failed", False),
-                        })
-                except Exception as e:
-                    sl.warning(f"Google Sheets 同步失敗（資料仍可從結果頁下載）：{e}")
+
+                with sl.spinner("同步招標資料至 Google Sheets…"):
+                    try:
+                        t_new = sheets_sync.append_new_records(
+                            _sp, tenders_df, "Tenders_RAW", _run_id, _ts,
+                            dedup_keys=["job_number", "招標次數"],
+                        )
+                    except Exception as e:
+                        sl.warning(f"招標資料 Sheets 同步失敗（資料仍可從結果頁下載）：{e}")
+
+                with sl.spinner("同步決標資料至 Google Sheets…"):
+                    try:
+                        a_new = sheets_sync.append_new_records(
+                            _sp, awards_df, "Awards_RAW", _run_id, _ts,
+                        )
+                    except Exception as e:
+                        sl.warning(f"決標資料 Sheets 同步失敗（資料仍可從結果頁下載）：{e}")
+
+                sheets_sync.append_run_log(_sp, {
+                    "run_id":           _run_id,
+                    "run_at":           _ts,
+                    "start_date":       formatted_date,
+                    "end_date":         int(today_date.strftime("%Y%m%d")),
+                    "tenders_scraped":  len(tenders_df),
+                    "awards_scraped":   len(awards_df),
+                    "tenders_new":      t_new,
+                    "awards_new":       a_new,
+                    "ai_provider":      sl.session_state.get("score_provider") or "FAILED",
+                    "score_failed":     sl.session_state.get("score_failed", False),
+                })
 
                 sl.session_state["run_id"]       = _run_id
                 sl.session_state["tenders_new"]  = t_new

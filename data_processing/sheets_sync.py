@@ -117,14 +117,19 @@ def ensure_headers(spreadsheet, tab_name, headers):
 
 # ── RAW data append ───────────────────────────────────────────────────────────
 
-def append_new_records(spreadsheet, df, tab_name, run_id, appended_at):
-    """Append rows from df that are not already in the sheet (dedup by job_number).
+def append_new_records(spreadsheet, df, tab_name, run_id, appended_at, dedup_keys=None):
+    """Append rows from df that are not already in the sheet.
 
+    dedup_keys: list of column names forming the composite dedup key.
+                Defaults to ["job_number"] when None.
     Prepends run_id + appended_at columns; appends tags + user_notes at the end.
     Returns the count of rows actually appended.
     """
     if df is None or df.empty:
         return 0
+
+    if dedup_keys is None:
+        dedup_keys = ["job_number"]
 
     df = df.copy()
     # Prepend housekeeping, append user-editable columns
@@ -138,18 +143,29 @@ def append_new_records(spreadsheet, df, tab_name, run_id, appended_at):
     headers = list(df.columns)
     ws = ensure_headers(spreadsheet, tab_name, headers)
 
-    # Read existing job_numbers for dedup
-    existing_jns: set = set()
-    if "job_number" in headers:
+    # Read existing composite keys from sheet for dedup
+    existing_combos: set = set()
+    available_keys = [k for k in dedup_keys if k in headers]
+    if available_keys:
         try:
             hdr = ws.row_values(1)
-            jn_idx = hdr.index("job_number") + 1  # 1-based
-            existing_jns = set(v for v in ws.col_values(jn_idx)[1:] if v)
+            col_indices = {}
+            for k in available_keys:
+                if k in hdr:
+                    col_indices[k] = hdr.index(k) + 1  # 1-based
+            if col_indices:
+                cols_data = [ws.col_values(idx)[1:] for idx in col_indices.values()]
+                max_len = max((len(c) for c in cols_data), default=0)
+                for i in range(max_len):
+                    parts = [c[i] if i < len(c) else "" for c in cols_data]
+                    if any(parts):
+                        existing_combos.add("|".join(parts))
         except Exception:
             pass
 
-    if "job_number" in df.columns:
-        new_df = df[~df["job_number"].astype(str).isin(existing_jns)].copy()
+    if available_keys:
+        incoming = df[available_keys].astype(str).agg("|".join, axis=1)
+        new_df = df[~incoming.isin(existing_combos)].copy()
     else:
         new_df = df.copy()
 

@@ -50,7 +50,7 @@
                                     "tender_columns": [
                                                         "date", "brief.title", "brief.category", "job_number",
                                                         "detail.機關資料:機關名稱", "detail.機關資料:單位名稱",
-                                                        "detail.領投開標:截止投標", "detail.招標資料:招標狀態",
+                                                        "detail.領投開標:截止投標", "detail.招標資料:招標狀態", "detail.招標資料:招標次數",
                                                         "detail.機關資料:聯絡人", "detail.機關資料:聯絡電話",
                                                         "detail.機關資料:電子郵件信箱", "detail.機關資料:傳真號碼",
                                                         "detail.採購資料:標的分類", "detail.採購資料:預算金額", "detail.url"
