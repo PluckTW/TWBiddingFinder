@@ -6,11 +6,10 @@
 # primary model is down / out of quota the scoring automatically falls back to a
 # cheaper backup model.
 #
-# Configure whichever keys you have in Streamlit secrets (only OPENAI_API_KEY is
-# required; the others are optional fallbacks):
-#   OPENAI_API_KEY = "sk-..."        # primary  -> gpt-4.1-mini
+# Configure whichever keys you have in Streamlit secrets:
+#   GROQ_API_KEY   = "..."           # primary  -> llama-3.1-8b-instant (free, fast)
 #   GEMINI_API_KEY = "..."           # fallback -> Google gemini-2.0-flash
-#   GROQ_API_KEY   = "..."           # fallback -> open-source llama-3.1-8b-instant (free)
+#   OPENAI_API_KEY = "sk-..."        # fallback -> gpt-4.1-mini
 import json
 import re
 import openai
@@ -60,13 +59,13 @@ _SYSTEM_PROMPT = (
 # Provider chain, tried in order. base_url=None uses OpenAI's default endpoint;
 # the others are OpenAI-compatible gateways.
 _PROVIDER_DEFS = [
-    {"name": "OpenAI (gpt-4.1-mini)", "secret": "OPENAI_API_KEY",
-     "model": "gpt-4.1-mini", "base_url": None},
+    {"name": "Groq (llama-3.1-8b-instant)", "secret": "GROQ_API_KEY",
+     "model": "llama-3.1-8b-instant", "base_url": "https://api.groq.com/openai/v1"},
     {"name": "Gemini (gemini-2.0-flash)", "secret": "GEMINI_API_KEY",
      "model": "gemini-2.0-flash",
      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"},
-    {"name": "Groq (llama-3.1-8b-instant)", "secret": "GROQ_API_KEY",
-     "model": "llama-3.1-8b-instant", "base_url": "https://api.groq.com/openai/v1"},
+    {"name": "OpenAI (gpt-4.1-mini)", "secret": "OPENAI_API_KEY",
+     "model": "gpt-4.1-mini", "base_url": None},
 ]
 
 # Name of the provider that produced the most recent successful scores.
