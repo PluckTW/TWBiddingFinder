@@ -230,13 +230,16 @@ def _score_chunk(titles, provider):
     return _parse_batch_scores(raw, len(titles))
 
 
-def score_titles(titles):
+def score_titles(titles, progress_callback=None):
     """Score a sequence of titles.
 
     Returns a list of scores (int 0-100, or None) aligned with the input.
     Non-string / blank titles are skipped (None). Providers are tried in order;
     if one raises an API error it is disabled for the rest of this run and the
     next provider is used.
+
+    progress_callback, if given, is called after each batch as
+    progress_callback(done, total) where done/total count valid titles.
     """
     global _LAST_PROVIDER, _LAST_DIAGNOSTICS
     titles = list(titles)
@@ -292,6 +295,12 @@ def score_titles(titles):
         if chunk_scores:
             for (orig_idx, _), score in zip(batch, chunk_scores):
                 scores[orig_idx] = score
+
+        if progress_callback:
+            try:
+                progress_callback(min(start + len(batch), len(valid)), len(valid))
+            except Exception:
+                pass
 
     return scores
 

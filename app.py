@@ -61,7 +61,7 @@ if sl.session_state['scraping_status'] == 'idle':
     # Form
     with sl.form("設定"):
         start_date = sl.date_input("開始日期", value=None)
-        sl.write(f"AI選擇相關標案 (threshold={ai_threshold})")
+        sl.write(f"AI 將自動為每筆標案評分（0–100），可於結果頁調整篩選門檻（預設 {ai_threshold}）")
         s_state = sl.form_submit_button("完成設定")
 
 
@@ -90,23 +90,25 @@ if sl.session_state['scraping_status'] == 'idle':
             delete_duplicates(tenders_df, awards_df)
 
             # Add AI score (batch scoring with automatic model fallback)
-            sl.write("Calculating Relevance...")
-
-            # ── Debug: inspect titles before scoring ──────────────────────
             tender_titles = tenders_df['title'].tolist() if 'title' in tenders_df.columns else []
             award_titles  = awards_df['title'].tolist()  if 'title' in awards_df.columns  else []
-            valid_tender = [t for t in tender_titles if isinstance(t, str) and t.strip()]
-            valid_award  = [t for t in award_titles  if isinstance(t, str) and t.strip()]
-            sl.write(f"🔍 待評分：招標 {len(valid_tender)}/{len(tender_titles)} 筆有效；"
-                     f"決標 {len(valid_award)}/{len(award_titles)} 筆有效")
-            if valid_tender:
-                sl.write("招標 title 範例：" + " | ".join(valid_tender[:3]))
-            if valid_award:
-                sl.write("決標 title 範例：" + " | ".join(valid_award[:3]))
-            # ─────────────────────────────────────────────────────────────
 
-            tender_score = score_titles(tender_titles)
-            award_score  = score_titles(award_titles)
+            # Progress bar covering both tender + award scoring.
+            n_tender = len([t for t in tender_titles if isinstance(t, str) and t.strip()])
+            n_award  = len([t for t in award_titles  if isinstance(t, str) and t.strip()])
+            total_valid = n_tender + n_award
+            progress_bar = sl.progress(0.0, text="AI 評分中…")
+            progress_state = {"base": 0}
+
+            def update_progress(done, _total):
+                overall = progress_state["base"] + done
+                frac = overall / total_valid if total_valid else 1.0
+                progress_bar.progress(min(frac, 1.0), text=f"AI 評分中… {overall}/{total_valid}")
+
+            tender_score = score_titles(tender_titles, progress_callback=update_progress)
+            progress_state["base"] = n_tender
+            award_score  = score_titles(award_titles, progress_callback=update_progress)
+            progress_bar.empty()
 
             tenders_df.insert(0, 'score', tender_score)
             awards_df.insert(0, 'score', award_score)
@@ -175,9 +177,19 @@ else:
     # Preview and download button
     if 'tender' in sl.session_state and 'award' in sl.session_state:
 
+        # Adjustable AI relevance threshold (live; no re-scrape needed).
+        threshold = sl.slider(
+            "AI 相關度篩選門檻 (score ≥)",
+            min_value=0, max_value=100,
+            value=int(sl.session_state.get('ai_threshold', ai_threshold)),
+            step=5,
+        )
+        sl.session_state['ai_threshold'] = threshold
+
         # Remove irrelevant
-        ai_filered_tenders_df = sl.session_state['tender'][sl.session_state['tender']['score'] >= sl.session_state['ai_threshold']]
-        ai_filtered_awards_df = sl.session_state['award'][sl.session_state['award']['score'] >= sl.session_state['ai_threshold']]
+        ai_filered_tenders_df = sl.session_state['tender'][sl.session_state['tender']['score'] >= threshold]
+        ai_filtered_awards_df = sl.session_state['award'][sl.session_state['award']['score'] >= threshold]
+        sl.caption(f"符合門檻：招標 {len(ai_filered_tenders_df)} 筆、決標 {len(ai_filtered_awards_df)} 筆")
 
 
         tender_csv = convert_df_to_csv(ai_filered_tenders_df)
