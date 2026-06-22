@@ -10,7 +10,7 @@
 # required; the others are optional fallbacks):
 #   OPENAI_API_KEY = "sk-..."        # primary  -> gpt-4.1-mini
 #   GEMINI_API_KEY = "..."           # fallback -> Google gemini-2.0-flash
-#   GROQ_API_KEY   = "..."           # fallback -> open-source gemma2-9b-it
+#   GROQ_API_KEY   = "..."           # fallback -> open-source llama-3.1-8b-instant (free)
 import json
 import re
 import openai
@@ -65,8 +65,8 @@ _PROVIDER_DEFS = [
     {"name": "Gemini (gemini-2.0-flash)", "secret": "GEMINI_API_KEY",
      "model": "gemini-2.0-flash",
      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"},
-    {"name": "Groq (gemma2-9b-it)", "secret": "GROQ_API_KEY",
-     "model": "gemma2-9b-it", "base_url": "https://api.groq.com/openai/v1"},
+    {"name": "Groq (llama-3.1-8b-instant)", "secret": "GROQ_API_KEY",
+     "model": "llama-3.1-8b-instant", "base_url": "https://api.groq.com/openai/v1"},
 ]
 
 # Name of the provider that produced the most recent successful scores.
