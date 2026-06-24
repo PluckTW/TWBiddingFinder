@@ -97,8 +97,8 @@ def load_keywords_from_sheet(spreadsheet):
         v = str(r.get("active", "")).strip().upper()
         return v in ("TRUE", "1", "YES")
 
-    title_kws   = [str(r["keyword"]) for r in records if str(r.get("type","")).strip() == "title"   and _active(r)]
-    company_kws = [str(r["keyword"]) for r in records if str(r.get("type","")).strip() == "company" and _active(r)]
+    title_kws   = [str(r["keyword"]) for r in records if str(r.get("type","")).strip().lower() == "title"   and _active(r)]
+    company_kws = [str(r["keyword"]) for r in records if str(r.get("type","")).strip().lower() == "company" and _active(r)]
     return {"title": title_kws, "company": company_kws}
 
 
