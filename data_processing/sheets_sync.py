@@ -77,7 +77,17 @@ def load_keywords_from_sheet(spreadsheet):
     try:
         ws = spreadsheet.worksheet("Keywords")
     except Exception:
-        raise SheetNotReadyError("Keywords tab not found in spreadsheet")
+        try:
+            available = [s.title for s in spreadsheet.worksheets()]
+            raise SheetNotReadyError(
+                f"找不到名為「Keywords」的分頁。"
+                f"試算表中現有的分頁：{available}。"
+                f"請將分頁名稱改為完全符合「Keywords」（區分大小寫）。"
+            )
+        except SheetNotReadyError:
+            raise
+        except Exception:
+            raise SheetNotReadyError("Keywords tab not found in spreadsheet")
 
     records = ws.get_all_records()
     if not records:
