@@ -167,7 +167,7 @@ with tab1:
                         try:
                             t_new = sheets_sync.append_new_records(
                                 _sp, tenders_df, "Tenders_RAW", _run_id, _ts,
-                                dedup_keys=["job_number", "招標資料:招標次數"],
+                                dedup_keys=["job_number", "招標資料:招標狀態"],
                             )
                         except Exception as e:
                             sl.warning(f"招標資料 Sheets 同步失敗（資料仍可從結果頁下載）：{e}")
@@ -219,7 +219,7 @@ with tab2:
     else:
         # Data source failures (site unreachable, API rate limit, ...)
         for _w in sl.session_state.get("source_warnings") or []:
-            sl.warning(f"⚠️ {_w}，本次結果可能不完整。")
+            sl.warning(f"⚠️ {_w}")
 
         # AI scoring status banner
         if sl.session_state.get("score_failed"):
