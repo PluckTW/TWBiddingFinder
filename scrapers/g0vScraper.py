@@ -1,8 +1,9 @@
 import pandas as pd
 import streamlit as sl
 import scrapers.utils
-from config.configLoader import TITLE_KEYWORDS, COMPANY_KEYWORDS, AWARD_SELECTED_COLUMNS, TENDER_SELECTED_COLUMNS, NOT_AWARD_SELECTED_COLUMNS
-from urllib.parse import quote
+import config.configLoader as cfg
+from config.configLoader import AWARD_SELECTED_COLUMNS, TENDER_SELECTED_COLUMNS, NOT_AWARD_SELECTED_COLUMNS
+from urllib.parse import quote, urlsplit
 import time
 
 
@@ -13,7 +14,25 @@ class G0vScraper:
         self.base_url = self.config['websites']['g0v']['api']['base_url']
         self.title_api = self.config['websites']['g0v']['api']['endpoints']['search_title']
         self.company_api = self.config['websites']['g0v']['api']['endpoints']['search_company']
+        self.tender_api = self.config['websites']['g0v']['api']['endpoints']['tenders']
         self.start_date = start_date
+        self.breaker = scrapers.utils.CircuitBreaker("g0v API")
+        self.warning = None  # shown on the results tab when a source failed
+        self.detail_attempted = 0
+        self.detail_failed = 0
+
+
+    @property
+    def details_broken(self):
+        # Every detail call so far has failed: the endpoint itself is broken,
+        # so stop paying ~2s per record for the rest of the run.
+        return self.detail_attempted >= 10 and self.detail_failed == self.detail_attempted
+
+
+    def detail_url(self, tender_api_url):
+        # Search results link to http://.../api/tender?..., which has been
+        # returning 404 for every record; rebuild it on the configured https base.
+        return f"{self.base_url}{self.tender_api}{urlsplit(tender_api_url).query}"
 
 
     def write_to_df(self, record, record_type):
@@ -45,11 +64,15 @@ class G0vScraper:
         page = 1
 
         api = f'{self.base_url}{endpoint}query={query}&page={page}'
-        response = scrapers.utils.request(api)
+        response = scrapers.utils.request(api, breaker=self.breaker)
         if response is None:
             print(f"g0v: request failed for keyword '{keyword}', skipping.")
             return full_records
-        json_data = response.json()
+        try:
+            json_data = response.json()
+        except ValueError as e:
+            print(f"g0v: JSON parse error for keyword '{keyword}': {e}, skipping.")
+            return full_records
 
         records = json_data.get('records', [])
         if not records:
@@ -62,11 +85,15 @@ class G0vScraper:
         while len(filtered_df) == 100:
             page += 1
             api = f'{self.base_url}{endpoint}query={query}&page={page}'
-            response = scrapers.utils.request(api)
+            response = scrapers.utils.request(api, breaker=self.breaker)
             if response is None:
                 print(f"g0v: pagination request failed at page {page}, stopping.")
                 break
-            json_data = response.json()
+            try:
+                json_data = response.json()
+            except ValueError as e:
+                print(f"g0v: JSON parse error at page {page}: {e}, stopping.")
+                break
             records = json_data.get('records', [])
             if not records:
                 break
@@ -88,12 +115,16 @@ class G0vScraper:
         awards_df = pd.DataFrame()
 
         for index, row in record_df.iterrows():
+            if self.breaker.is_open or self.details_broken:
+                break
             time.sleep(1)
-            api_url = row['tender_api_url']
+            api_url = self.detail_url(row['tender_api_url'])
             filename = row['filename']
 
-            response = scrapers.utils.request(api_url)
+            self.detail_attempted += 1
+            response = scrapers.utils.request(api_url, breaker=self.breaker)
             if response is None:
+                self.detail_failed += 1
                 print(f"g0v: detail request failed for {filename}, skipping.")
                 continue
 
@@ -139,7 +170,9 @@ class G0vScraper:
         keyword_placeholder = sl.empty()
 
         # search with title
-        for keyword in TITLE_KEYWORDS:
+        for keyword in cfg.TITLE_KEYWORDS:
+            if self.breaker.is_open:
+                break
             keyword_placeholder.text(f"Processing keyword: {keyword}")
 
 
@@ -154,7 +187,9 @@ class G0vScraper:
         new_tender_df = new_tender_df.rename(columns={'機關資料:機關名稱': '機關名稱'})
 
         # search with company
-        for keyword in COMPANY_KEYWORDS:
+        for keyword in cfg.COMPANY_KEYWORDS:
+            if self.breaker.is_open:
+                break
             keyword_placeholder.text(f"Processing keyword: {keyword}")
 
             company_search_df = self.search_listings(keyword, self.company_api)
@@ -164,6 +199,18 @@ class G0vScraper:
             new_tender_df = pd.concat([new_tender_df, tender_df], ignore_index=True)
             new_award_df = pd.concat([new_award_df, award_df], ignore_index=True)
 
+
+        if self.breaker.is_open:
+            msg = (f"g0v API 連續 {self.breaker.failures} 次失敗（{self.breaker.last_error}），"
+                   f"已跳過剩餘關鍵字")
+            print(f"g0v: {msg}")
+            self.warning = msg
+            keyword_placeholder.warning(msg)
+        elif self.detail_attempted and self.detail_failed == self.detail_attempted:
+            msg = f"g0v API 明細查詢前 {self.detail_failed} 筆全部失敗，已停止查明細，g0v 本次沒有資料"
+            print(f"g0v: {msg}")
+            self.warning = msg
+            keyword_placeholder.warning(msg)
 
         ## Award table formatting
 
