@@ -41,13 +41,15 @@ DEFAULT_TIMEOUT = (10, 30)
 
 
 def request(api, timeout=DEFAULT_TIMEOUT, breaker=None, headers=None,
-            retries=5, http_errors_trip_breaker=True):
+            retries=5, http_errors_trip_breaker=True, failure=None):
     """GET with retry on 429/5xx. Returns the response on 200, else None.
 
     http_errors_trip_breaker=False: a 429/5xx that outlasts the retries
     doesn't count toward the breaker (only network errors do) — for calls
     where one request failing says nothing about the host, e.g. one day's
     listing.
+    failure: optional list; on failure the reason ("HTTP 500",
+    "ReadTimeout", ...) is appended so the caller can tell failures apart.
     """
     if breaker is not None and breaker.is_open:
         return None
@@ -59,6 +61,8 @@ def request(api, timeout=DEFAULT_TIMEOUT, breaker=None, headers=None,
             response = requests.get(api, timeout=timeout, headers=headers)
         except requests.RequestException as e:
             print(f"Network error for {api}: {e}")
+            if failure is not None:
+                failure.append(type(e).__name__)
             if breaker is not None:
                 breaker.record_failure(f"{type(e).__name__}")
             return None
@@ -74,9 +78,13 @@ def request(api, timeout=DEFAULT_TIMEOUT, breaker=None, headers=None,
             attempt += 1
         else:
             print(f"Failed to fetch {api}. Status: {response.status_code}")
+            if failure is not None:
+                failure.append(f"HTTP {response.status_code}")
             return None
 
     print(f"Max retries reached for {api}. Returning None.")
+    if failure is not None:
+        failure.append(f"HTTP {response.status_code}")
     if breaker is not None and http_errors_trip_breaker:
         breaker.record_failure(f"HTTP {response.status_code}")
     return None

@@ -46,7 +46,8 @@ class G0vScraper:
         self.warning = None  # shown on the results tab when a source failed
         self.detail_attempted = 0
         self.detail_failed = 0
-        self.failed_dates = []
+        self.empty_dates = []    # HTTP 500: what g0v answers for a day without notices
+        self.failed_dates = []   # (date, reason) for anything else — a real gap
 
 
     @property
@@ -104,12 +105,17 @@ class G0vScraper:
         # Some days answer HTTP 500 (seen on a weekend run) while the next day
         # works, so a day's error skips only that day; only network errors
         # count toward stopping the whole run.
+        failure = []
         response = scrapers.utils.request(api, timeout=(10, 90), breaker=self.breaker,
                                           headers=self.headers, retries=2,
-                                          http_errors_trip_breaker=False)
+                                          http_errors_trip_breaker=False, failure=failure)
         if response is None:
-            print(f"g0v: listbydate failed for {date}, skipping.")
-            self.failed_dates.append(date)
+            reason = failure[-1] if failure else "unknown"
+            print(f"g0v: listbydate failed for {date} ({reason}), skipping.")
+            if reason == "HTTP 500":
+                self.empty_dates.append(date)
+            elif not self.breaker.is_open:   # breaker message already covers the rest
+                self.failed_dates.append((date, reason))
             return []
         try:
             return response.json().get('records', []) or []
@@ -234,10 +240,13 @@ class G0vScraper:
             problems.append(f"g0v API 連續 {self.breaker.failures} 次失敗（{self.breaker.last_error}），"
                             f"已停止讀取剩餘日期，本次結果不完整")
         if self.failed_dates:
+            problems.append("g0v 以下日期讀取失敗、已跳過，本次結果不完整，請稍後重跑："
+                            + "、".join(f"{self.label_date(d)} {r}" for d, r in self.failed_dates))
+        if self.empty_dates:
             # g0v answers HTTP 500 for days with no notices (seen on the
             # 2026-10-24..26 holiday), so this is usually not a real failure
             problems.append("g0v 以下日期沒有資料（多為假日；若是上班日請重跑）："
-                            + "、".join(self.label_date(d) for d in self.failed_dates))
+                            + "、".join(self.label_date(d) for d in self.empty_dates))
         if self.detail_failed:
             problems.append(f"g0v 明細查詢 {self.detail_failed}/{self.detail_attempted} 筆失敗，"
                             f"這些標案改用列表資料（缺聯絡人、金額等欄位）")
