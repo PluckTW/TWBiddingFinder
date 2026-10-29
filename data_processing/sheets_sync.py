@@ -326,3 +326,106 @@ def load_top_organizations(spreadsheet, top_n=10):
     except Exception as e:
         print(f"[sheets_sync] load_top_organizations failed: {e}")
         return pd.DataFrame()
+
+
+# ── Overview for the landing page ─────────────────────────────────────────────
+
+# (label, lower bound inclusive, upper bound exclusive)
+_AMOUNT_BUCKETS = [("2000萬+", 20_000_000, None), ("500–2000萬", 5_000_000, 20_000_000),
+                   ("100–500萬", 1_000_000, 5_000_000), ("100萬↓", 0, 1_000_000)]
+
+
+def _tab_frame(spreadsheet, tab):
+    """Whole tab as a DataFrame of strings (one API call). Empty on failure."""
+    try:
+        values = spreadsheet.worksheet(tab).get_all_values()
+    except Exception as e:
+        print(f"[sheets_sync] read {tab} failed: {e}")
+        return pd.DataFrame()
+    if len(values) < 2:
+        return pd.DataFrame()
+    width = len(values[0])
+    rows = [r + [""] * (width - len(r)) for r in values[1:]]
+    return pd.DataFrame(rows, columns=values[0])
+
+
+def _roc_date(text):
+    """'115/11/04 17:00' (ROC calendar) -> date, or None."""
+    import re
+    from datetime import date
+    m = re.match(r"\s*(\d{2,3})/(\d{1,2})/(\d{1,2})", str(text or ""))
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)) + 1911, int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def _amount(text):
+    """'24,000,000元' -> 24000000.0, or None."""
+    import re
+    digits = re.sub(r"[^\d.]", "", str(text or ""))
+    try:
+        return float(digits) if digits else None
+    except ValueError:
+        return None
+
+
+def load_overview(spreadsheet, company_keywords, today):
+    """Everything the landing page shows, from three sheet reads."""
+    tenders = _tab_frame(spreadsheet, "Tenders_RAW")
+    awards = _tab_frame(spreadsheet, "Awards_RAW")
+    runs = _tab_frame(spreadsheet, "RunLog")
+
+    def col(df, name):
+        return df[name] if name in df.columns else pd.Series([""] * len(df), dtype=str)
+
+    deadlines = col(tenders, "領投開標:截止投標").map(_roc_date)
+    open_tenders = int(sum(1 for d in deadlines if d and d >= today))
+    award_types = col(awards, "type")
+    awarded = int((award_types == "決標公告").sum())
+    failed = int((award_types == "無法決標公告").sum())
+
+    # Only awarded notices carry an amount; failed awards have none by nature
+    amounts = [_amount(v) for v in col(awards, "決標資料:總決標金額")[award_types == "決標公告"]]
+    buckets = [(label, sum(1 for a in amounts if a is not None and a >= lo and (hi is None or a < hi)))
+               for label, lo, hi in _AMOUNT_BUCKETS]
+    buckets.append(("未公開", sum(1 for a in amounts if a is None)))
+
+    winners = col(awards, "決標品項:第1品項:得標廠商1:得標廠商")
+    dealer_wins = sorted(((kw, int(winners.str.contains(kw, regex=False).sum()))
+                          for kw in company_keywords), key=lambda x: -x[1])
+    dealer_wins = [(kw, n) for kw, n in dealer_wins if n]
+
+    orgs = pd.concat([col(tenders, "機關名稱"), col(awards, "機關名稱")])
+    top_orgs = list(orgs[orgs != ""].value_counts().head(8).items())
+
+    max_amount = max((a for a in amounts if a), default=0)
+
+    # Most recent notices, for the radar blips
+    recent = []
+    for kind, df in (("招標", tenders), ("決標", awards)):
+        for _, r in df.tail(40).iterrows():
+            recent.append({"kind": kind, "title": r.get("title", ""), "job": r.get("job_number", ""),
+                           "score": pd.to_numeric(r.get("score", ""), errors="coerce"),
+                           "date": r.get("date", "")})
+    recent.sort(key=lambda r: str(r["date"]), reverse=True)
+
+    return {
+        "total": len(tenders) + len(awards),
+        "total_tenders": len(tenders),
+        "total_awards": len(awards),
+        "total_runs": len(runs),
+        "last_run_at": str(runs["run_at"].iloc[-1]) if "run_at" in runs.columns and len(runs) else "",
+        "open_tenders": open_tenders,
+        "closed_tenders": len(tenders) - open_tenders,
+        "awarded": awarded,
+        "failed": failed,
+        "amount_buckets": buckets,
+        "max_amount": max_amount,
+        "dealer_wins": dealer_wins,
+        "dealer_win_total": sum(n for _, n in dealer_wins),
+        "top_orgs": top_orgs,
+        "recent": recent[:60],
+    }
