@@ -3,6 +3,7 @@ import threading
 import uuid
 import pytz
 import altair as alt
+import pandas as pd
 from datetime import datetime
 from data_processing.data_cleaner import delete_duplicates
 from data_processing import sheets_sync
@@ -102,9 +103,16 @@ with tab1:
                 g0vScraper = G0vScraper(formatted_date, CONFIG_PATH)
                 g0vTenderDf, g0vAwardDf = g0vScraper.run_scraper()
 
-                pccScraper = PccScraper(formatted_date, CONFIG_PATH)
-                pccTenderDf, pccAwardDf = pccScraper.run_scraper()
-                source_warnings = [w for w in (g0vScraper.warning, pccScraper.warning) if w]
+                # Direct PCC scraping is switched off in config.json (unreachable
+                # from Streamlit Cloud); the module stays for a Taiwan-hosted deploy.
+                pcc_warning = None
+                if cfg.config['websites']['pcc_gov'].get('enabled', True):
+                    pccScraper = PccScraper(formatted_date, CONFIG_PATH)
+                    pccTenderDf, pccAwardDf = pccScraper.run_scraper()
+                    pcc_warning = pccScraper.warning
+                else:
+                    pccTenderDf, pccAwardDf = pd.DataFrame(), pd.DataFrame()
+                source_warnings = [w for w in (g0vScraper.warning, pcc_warning) if w]
 
                 scrapeDataMerger = PccG0vMerger(pccTenderDf, pccAwardDf, g0vTenderDf, g0vAwardDf)
                 tenders_df, awards_df = scrapeDataMerger.run_merger()

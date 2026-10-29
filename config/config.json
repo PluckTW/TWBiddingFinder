@@ -20,6 +20,8 @@
         "websites":{
                     "pcc_gov": {
                                     "name": "政府採購網",
+                                    "enabled": false,
+                                    "disabled_note": "2026-10 起從 Streamlit Cloud 連不上（ConnectTimeout），資料改由 g0v 提供；說明見 docs/data_sources.md",
                                     "baseUrl": "https://web.pcc.gov.tw/",
                                     "listing_base_url": "https://web.pcc.gov.tw/prkms/tender/common/bulletion/readBulletion"
                     },
