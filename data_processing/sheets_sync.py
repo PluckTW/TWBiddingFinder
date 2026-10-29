@@ -187,7 +187,12 @@ def append_new_records(spreadsheet, df, tab_name, run_id, appended_at, dedup_key
 
     # Align columns to the header order in the sheet (in case schema differs)
     actual_hdr = ws.row_values(1) or headers
-    aligned_cols = [c for c in actual_hdr if c in new_df.columns]
+    # Rows are appended by position, so every header column needs a value;
+    # a missing column would shift the values after it under wrong headers.
+    for c in actual_hdr:
+        if c not in new_df.columns:
+            new_df[c] = ""
+    aligned_cols = list(actual_hdr)
     # Any columns in df but not in sheet header go at the end
     extra_cols = [c for c in new_df.columns if c not in actual_hdr]
     aligned_cols += extra_cols
