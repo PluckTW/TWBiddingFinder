@@ -30,7 +30,9 @@
                                                         "endpoints": {
                                                                                 "search_title": "searchbytitle?",
                                                                                 "search_company": "searchbycompanyname?",
-                                                                                "tenders": "tender?"
+                                                                                "tenders": "tender?",
+                                                                                "list_date": "listbydate?",
+                                                                                "info": "getinfo"
                                                         }
                                     }
                     },

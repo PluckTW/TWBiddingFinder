@@ -3,19 +3,45 @@ import streamlit as sl
 import scrapers.utils
 import config.configLoader as cfg
 from config.configLoader import AWARD_SELECTED_COLUMNS, TENDER_SELECTED_COLUMNS, NOT_AWARD_SELECTED_COLUMNS
-from urllib.parse import quote, urlsplit
+from datetime import datetime, timedelta
+import pytz
+from urllib.parse import urlsplit, parse_qs, urlencode
+import re
 import time
 
 
+VALID_TENDER_TYPES = ['無法決標公告', '決標公告', '公開招標公告', '公開取得報價單或企劃書公告',
+                      '公開取得報價單或企劃書更正公告', '經公開評選或公開徵求之限制性招標公告']
+AWARD_TYPES = ('決標公告', '無法決標公告')
+VIEWER_URL = "https://openfunltd.github.io/pcc-viewer/tender.html?"
+
+
+def openfun_headers():
+    """Identify ourselves and send the OpenFun token (Streamlit secret
+    OPENFUN_TOKEN) when configured; token holders get a higher rate limit."""
+    headers = {"User-Agent": "TWBiddingFinder/1.0"}
+    try:
+        token = sl.secrets.get("OPENFUN_TOKEN")
+    except Exception:
+        token = None
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
 
 class G0vScraper:
+    """Fetches every notice per day via listbydate (one call per day, like
+    bidscan.tw) and matches keywords locally, instead of one search per
+    keyword plus one detail call per hit, which got us throttled/blocked."""
+
     def __init__(self, start_date, config_path):
         self.config = scrapers.utils.load_config(config_path)
+        endpoints = self.config['websites']['g0v']['api']['endpoints']
         self.base_url = self.config['websites']['g0v']['api']['base_url']
-        self.title_api = self.config['websites']['g0v']['api']['endpoints']['search_title']
-        self.company_api = self.config['websites']['g0v']['api']['endpoints']['search_company']
-        self.tender_api = self.config['websites']['g0v']['api']['endpoints']['tenders']
+        self.tender_api = endpoints['tenders']
+        self.date_api = endpoints['list_date']
         self.start_date = start_date
+        self.headers = openfun_headers()
         self.breaker = scrapers.utils.CircuitBreaker("g0v API")
         self.warning = None  # shown on the results tab when a source failed
         self.detail_attempted = 0
@@ -30,8 +56,7 @@ class G0vScraper:
 
 
     def detail_url(self, tender_api_url):
-        # Search results link to http://.../api/tender?..., which has been
-        # returning 404 for every record; rebuild it on the configured https base.
+        # Rebuild on the configured base so all calls go to the same host/scheme.
         return f"{self.base_url}{self.tender_api}{urlsplit(tender_api_url).query}"
 
 
@@ -57,160 +82,155 @@ class G0vScraper:
         return df
 
 
-    def search_listings(self, keyword, keyword_type):
-        full_records = pd.DataFrame()
-        endpoint = keyword_type
-        query = quote(f'{keyword}')
-        page = 1
+    def dates_to_fetch(self):
+        # Server runs in UTC; notices are dated in Taiwan time
+        today = datetime.now(pytz.timezone("Asia/Taipei")).date()
+        day = datetime.strptime(str(self.start_date), "%Y%m%d").date()
+        while day <= today:
+            yield int(day.strftime("%Y%m%d"))
+            day += timedelta(days=1)
 
-        api = f'{self.base_url}{endpoint}query={query}&page={page}'
-        response = scrapers.utils.request(api, breaker=self.breaker)
+
+    def list_by_date(self, date):
+        api = f"{self.base_url}{self.date_api}date={date}"
+        # A whole day's notices is a big response; allow it more read time.
+        response = scrapers.utils.request(api, timeout=(10, 90), breaker=self.breaker,
+                                          headers=self.headers)
         if response is None:
-            print(f"g0v: request failed for keyword '{keyword}', skipping.")
-            return full_records
+            print(f"g0v: listbydate failed for {date}, skipping.")
+            return []
         try:
-            json_data = response.json()
+            return response.json().get('records', []) or []
         except ValueError as e:
-            print(f"g0v: JSON parse error for keyword '{keyword}': {e}, skipping.")
-            return full_records
+            print(f"g0v: JSON parse error for {date}: {e}, skipping.")
+            return []
 
-        records = json_data.get('records', [])
-        if not records:
-            return full_records
-        raw_records_df = pd.DataFrame(records)
-        records_df = raw_records_df[['date', 'filename', 'brief', 'tender_api_url']]
-        filtered_df = records_df[records_df['date'] >= self.start_date]
-        full_records = pd.concat([full_records, filtered_df], ignore_index=True)
-        # next page
-        while len(filtered_df) == 100:
-            page += 1
-            api = f'{self.base_url}{endpoint}query={query}&page={page}'
-            response = scrapers.utils.request(api, breaker=self.breaker)
-            if response is None:
-                print(f"g0v: pagination request failed at page {page}, stopping.")
-                break
-            try:
-                json_data = response.json()
-            except ValueError as e:
-                print(f"g0v: JSON parse error at page {page}: {e}, stopping.")
-                break
-            records = json_data.get('records', [])
-            if not records:
-                break
-            raw_records_df = pd.DataFrame(records)
-            records_df = raw_records_df[['date', 'filename', 'brief', 'tender_api_url']]
-            filtered_df = records_df[records_df['date'] >= self.start_date]
-            full_records = pd.concat([full_records, filtered_df], ignore_index=True)
 
-        full_records['tender_type'] = full_records['brief'].apply(lambda x: x['type'])
-        del full_records['brief']
-        valid_tender_types = ['無法決標公告', '決標公告', '公開招標公告','公開取得報價單或企劃書公告','公開取得報價單或企劃書更正公告','經公開評選或公開徵求之限制性招標公告']
-        full_records = full_records[full_records['tender_type'].isin(valid_tender_types)]
+    @staticmethod
+    def match_keywords(record):
+        """Keywords this notice matches: title keywords against the title,
+        and for award notices dealer names against the bidding companies."""
+        brief = record.get('brief') or {}
+        notice_type = brief.get('type')
+        if notice_type not in VALID_TENDER_TYPES:
+            return []
+        # g0v titles have spaces between words; keywords don't
+        title = re.sub(r'\s+', '', str(brief.get('title') or ''))
+        matched = []
+        if notice_type in AWARD_TYPES:
+            names = (brief.get('companies') or {}).get('names') or []
+            matched += [kw for kw in cfg.COMPANY_KEYWORDS if any(kw in str(n) for n in names)]
+        matched += [kw for kw in cfg.TITLE_KEYWORDS if kw in title]
+        return matched
 
-        return full_records
-    
 
-    def scrape_details(self, record_df):
-        tenders_df = pd.DataFrame()
-        awards_df = pd.DataFrame()
+    def fetch_detail(self, record):
+        if self.breaker.is_open or self.details_broken or not record.get('tender_api_url'):
+            return None
+        time.sleep(1)
+        self.detail_attempted += 1
+        response = scrapers.utils.request(self.detail_url(record['tender_api_url']),
+                                          breaker=self.breaker, headers=self.headers)
+        if response is None:
+            self.detail_failed += 1
+            return None
+        try:
+            records = response.json().get('records', []) or []
+        except ValueError:
+            self.detail_failed += 1
+            return None
+        return next((r for r in records if r.get('filename') == record.get('filename')), None)
 
-        for index, row in record_df.iterrows():
-            if self.breaker.is_open or self.details_broken:
-                break
-            time.sleep(1)
-            api_url = self.detail_url(row['tender_api_url'])
-            filename = row['filename']
 
-            self.detail_attempted += 1
-            response = scrapers.utils.request(api_url, breaker=self.breaker)
-            if response is None:
-                self.detail_failed += 1
-                print(f"g0v: detail request failed for {filename}, skipping.")
-                continue
+    @staticmethod
+    def listing_row(record, notice_type):
+        """Row built from the listing alone, used when the detail call fails,
+        so a matched notice is still reported (without contact columns)."""
+        brief = record.get('brief') or {}
+        query = parse_qs(urlsplit(record.get('tender_api_url') or '').query)
+        unit_id = record.get('unit_id') or (query.get('unit_id') or [None])[0]
+        job_number = record.get('job_number') or (query.get('job_number') or [None])[0]
+        row = {
+            'date': record.get('date'),
+            'title': brief.get('title'),
+            'job_number': job_number,
+            '機關資料:機關名稱': record.get('unit_name'),
+            'url': VIEWER_URL + urlencode({'unit_id': unit_id, 'job_number': job_number})
+                   if unit_id and job_number else None,
+        }
+        if notice_type in AWARD_TYPES:
+            row['type'] = notice_type
+        else:
+            row['category'] = brief.get('category')
+            row['採購資料:標的分類'] = brief.get('category')
+        return pd.DataFrame([row])
 
-            try:
-                json_data = response.json()
-            except Exception as e:
-                print(f"g0v: JSON parse error for {filename}: {e}, skipping.")
-                continue
 
-            # find matching record with filename
-            records = json_data.get('records', [])
-            matching_record = next(
-                (record for record in records if record.get('filename', '') == filename), None
-            )
-            if matching_record is None:
-                print(f"g0v: no matching record for {filename}, skipping.")
-                continue
+    def record_to_df(self, record):
+        notice_type = (record.get('brief') or {}).get('type')
+        # listbydate may already carry the full detail; only call tender if not
+        full = record if record.get('detail') else self.fetch_detail(record)
+        if full is None:
+            return self.listing_row(record, notice_type)
+        if notice_type == '決標公告':
+            return self.write_to_df(full, AWARD_SELECTED_COLUMNS)
+        if notice_type == '無法決標公告':
+            return self.write_to_df(full, NOT_AWARD_SELECTED_COLUMNS)
+        return self.write_to_df(full, TENDER_SELECTED_COLUMNS)
 
-            try:
-                if row['tender_type'] == '決標公告':
-                    award_df = self.write_to_df(matching_record, AWARD_SELECTED_COLUMNS)
-                    awards_df = pd.concat([awards_df, award_df], ignore_index=True)
-
-                elif row['tender_type'] == '無法決標公告':
-                    award_df = self.write_to_df(matching_record, NOT_AWARD_SELECTED_COLUMNS)
-                    awards_df = pd.concat([awards_df, award_df], ignore_index=True)
-
-                else:
-                    tender_df = self.write_to_df(matching_record, TENDER_SELECTED_COLUMNS)
-                    tenders_df = pd.concat([tenders_df, tender_df], ignore_index=True)
-            except Exception as e:
-                print(f"g0v: write_to_df error for {filename}: {e}, skipping.")
-
-        return tenders_df, awards_df
-    
 
     def run_scraper(self):
         sl.write("g0v scraper is now running:")
+        status = sl.empty()
 
-        new_tender_df = pd.DataFrame()
-        new_award_df = pd.DataFrame()
-
-        keyword_placeholder = sl.empty()
-
-        # search with title
-        for keyword in cfg.TITLE_KEYWORDS:
+        # 1) one listbydate call per day, match locally
+        dates = list(self.dates_to_fetch())
+        matches = []
+        for i, date in enumerate(dates, 1):
             if self.breaker.is_open:
                 break
-            keyword_placeholder.text(f"Processing keyword: {keyword}")
+            status.text(f"g0v: 讀取 {date} 公告（{i}/{len(dates)} 天）")
+            for record in self.list_by_date(date):
+                if int(record.get('date') or 0) < self.start_date:
+                    continue
+                keywords = self.match_keywords(record)
+                if keywords:
+                    matches.append((record, "、".join(keywords)))
+            time.sleep(1)
 
+        # 2) details only for the matched notices
+        tender_frames, award_frames = [], []
+        for i, (record, keyword) in enumerate(matches, 1):
+            status.text(f"g0v: 查詢明細 {i}/{len(matches)}")
+            try:
+                df = self.record_to_df(record)
+            except Exception as e:
+                print(f"g0v: row build error for {record.get('filename')}: {e}, skipping.")
+                continue
+            df.insert(0, 'keyword', keyword)
+            if (record.get('brief') or {}).get('type') in AWARD_TYPES:
+                award_frames.append(df)
+            else:
+                tender_frames.append(df)
 
-            title_search_df = self.search_listings(keyword, self.title_api)
-            tender_df, award_df = self.scrape_details(title_search_df)
-
-            tender_df.insert(0, 'keyword', keyword)
-            award_df.insert(0, 'keyword', keyword)
-            new_tender_df = pd.concat([new_tender_df, tender_df], ignore_index=True)
-            new_award_df = pd.concat([new_award_df, award_df], ignore_index=True)
-
+        new_tender_df = pd.concat(tender_frames, ignore_index=True) if tender_frames else pd.DataFrame()
+        new_award_df = pd.concat(award_frames, ignore_index=True) if award_frames else pd.DataFrame()
         new_tender_df = new_tender_df.rename(columns={'機關資料:機關名稱': '機關名稱'})
-
-        # search with company
-        for keyword in cfg.COMPANY_KEYWORDS:
-            if self.breaker.is_open:
-                break
-            keyword_placeholder.text(f"Processing keyword: {keyword}")
-
-            company_search_df = self.search_listings(keyword, self.company_api)
-            tender_df, award_df = self.scrape_details(company_search_df)
-            tender_df.insert(0, 'keyword', keyword)
-            award_df.insert(0, 'keyword', keyword)
-            new_tender_df = pd.concat([new_tender_df, tender_df], ignore_index=True)
-            new_award_df = pd.concat([new_award_df, award_df], ignore_index=True)
-
 
         if self.breaker.is_open:
             msg = (f"g0v API 連續 {self.breaker.failures} 次失敗（{self.breaker.last_error}），"
-                   f"已跳過剩餘關鍵字")
+                   f"已停止讀取剩餘日期")
             print(f"g0v: {msg}")
             self.warning = msg
-            keyword_placeholder.warning(msg)
+            status.warning(msg)
         elif self.detail_attempted and self.detail_failed == self.detail_attempted:
-            msg = f"g0v API 明細查詢前 {self.detail_failed} 筆全部失敗，已停止查明細，g0v 本次沒有資料"
+            msg = (f"g0v 明細查詢 {self.detail_failed} 筆全部失敗，已改用列表資料"
+                   f"（缺聯絡人、金額等欄位）")
             print(f"g0v: {msg}")
             self.warning = msg
-            keyword_placeholder.warning(msg)
+            status.warning(msg)
+        else:
+            status.text(f"g0v: 完成，{len(dates)} 天、比對到 {len(matches)} 筆")
 
         ## Award table formatting
 
@@ -254,6 +274,7 @@ class G0vScraper:
         values_to_keep = ['財物類352-醫藥產品', '財物類481-醫療,外科及矯形設備', '財物類482-做為測量、檢查、航行及其他目的用之儀器和裝置，除光學儀器;工業程序控制設備;上述各項之零件及附件', '財物類483-光學儀器,攝影設備及其零件與附件', '財物類449-其他特殊用途之機具及其零件']
 
         if '採購資料:標的分類' in new_tender_df.columns:
-            new_tender_df = new_tender_df.drop(new_tender_df.index[~new_tender_df['採購資料:標的分類'].isin(values_to_keep)])
+            category = new_tender_df['採購資料:標的分類']
+            new_tender_df = new_tender_df[category.isna() | category.isin(values_to_keep)]
 
         return new_tender_df, new_award_df

@@ -8,6 +8,7 @@ from data_processing.data_cleaner import delete_duplicates
 from data_processing import sheets_sync
 from scrapers.g0vScraper import G0vScraper
 from scrapers.pccScraper import PccScraper
+from scrapers import diagnostics
 from data_processing.pcc_g0v_merger import PccG0vMerger
 import config.configLoader as cfg
 from config.configLoader import CONFIG_PATH
@@ -74,6 +75,14 @@ with tab1:
         sl.caption("✅ Google Sheets 後台已連線，關鍵字從 Keywords 分頁讀取")
     else:
         sl.caption("⚠️ Google Sheets 未設定，關鍵字從本機 config.json 讀取")
+
+    with sl.expander("🔧 資料來源連線診斷"):
+        sl.caption("從這台伺服器實際連一次 g0v API 與政府採購網，約需 1 分鐘")
+        if sl.button("執行診斷"):
+            with sl.spinner("診斷中…"):
+                sl.session_state["diagnostics"] = diagnostics.run(CONFIG_PATH)
+        if sl.session_state.get("diagnostics"):
+            sl.dataframe(sl.session_state["diagnostics"], use_container_width=True)
 
     with sl.form("設定"):
         start_date = sl.date_input("開始日期", value=None)

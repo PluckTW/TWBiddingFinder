@@ -40,7 +40,7 @@ class CircuitBreaker:
 DEFAULT_TIMEOUT = (10, 30)
 
 
-def request(api, timeout=DEFAULT_TIMEOUT, breaker=None):
+def request(api, timeout=DEFAULT_TIMEOUT, breaker=None, headers=None):
     if breaker is not None and breaker.is_open:
         return None
 
@@ -49,7 +49,7 @@ def request(api, timeout=DEFAULT_TIMEOUT, breaker=None):
     attempt = 0
     while attempt < retries:
         try:
-            response = requests.get(api, timeout=timeout)
+            response = requests.get(api, timeout=timeout, headers=headers)
         except requests.RequestException as e:
             print(f"Network error for {api}: {e}")
             if breaker is not None:
