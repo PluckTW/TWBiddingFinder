@@ -238,96 +238,6 @@ def append_run_log(spreadsheet, log_entry):
         print(f"[sheets_sync] append_run_log failed: {e}")
 
 
-# ── Stats for Tab 3 ───────────────────────────────────────────────────────────
-
-def load_run_history(spreadsheet, n=20):
-    """Return the last n rows of RunLog as a DataFrame. Empty on failure."""
-    try:
-        ws = spreadsheet.worksheet("RunLog")
-        records = ws.get_all_records()
-        if not records:
-            return pd.DataFrame()
-        df = pd.DataFrame(records)
-        return df.tail(n).iloc[::-1].reset_index(drop=True)
-    except Exception as e:
-        print(f"[sheets_sync] load_run_history failed: {e}")
-        return pd.DataFrame()
-
-
-def load_cumulative_totals(spreadsheet):
-    """Return {total_tenders, total_awards, total_runs} by reading row counts."""
-    result = {"total_tenders": 0, "total_awards": 0, "total_runs": 0}
-    try:
-        for tab, key in [("Tenders_RAW", "total_tenders"), ("Awards_RAW", "total_awards")]:
-            try:
-                ws = spreadsheet.worksheet(tab)
-                # row_count minus 1 header row; use first column as proxy
-                vals = ws.col_values(1)
-                result[key] = max(0, len(vals) - 1)
-            except Exception:
-                pass
-        try:
-            ws = spreadsheet.worksheet("RunLog")
-            vals = ws.col_values(1)
-            result["total_runs"] = max(0, len(vals) - 1)
-        except Exception:
-            pass
-    except Exception as e:
-        print(f"[sheets_sync] load_cumulative_totals failed: {e}")
-    return result
-
-
-def load_score_distribution(spreadsheet):
-    """Return DataFrame with columns [source, score] for histogram. Empty on failure."""
-    try:
-        dfs = []
-        for tab, label in [("Tenders_RAW", "招標"), ("Awards_RAW", "決標")]:
-            try:
-                ws = spreadsheet.worksheet(tab)
-                hdr = ws.row_values(1)
-                if "score" not in hdr:
-                    continue
-                col_idx = hdr.index("score") + 1
-                scores = ws.col_values(col_idx)[1:]
-                if scores:
-                    numeric = pd.to_numeric(scores, errors="coerce").dropna()
-                    # Exclude sentinel -1 (scoring failure)
-                    numeric = numeric[numeric >= 0]
-                    if not numeric.empty:
-                        dfs.append(pd.DataFrame({"source": label, "score": numeric}))
-            except Exception:
-                continue
-        return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-    except Exception as e:
-        print(f"[sheets_sync] load_score_distribution failed: {e}")
-        return pd.DataFrame()
-
-
-def load_top_organizations(spreadsheet, top_n=10):
-    """Return DataFrame with columns [機關名稱, count], top_n rows. Empty on failure."""
-    try:
-        all_orgs = []
-        for tab in ["Tenders_RAW", "Awards_RAW"]:
-            try:
-                ws = spreadsheet.worksheet(tab)
-                hdr = ws.row_values(1)
-                if "機關名稱" not in hdr:
-                    continue
-                col_idx = hdr.index("機關名稱") + 1
-                orgs = ws.col_values(col_idx)[1:]
-                all_orgs.extend(o for o in orgs if o)
-            except Exception:
-                continue
-        if not all_orgs:
-            return pd.DataFrame()
-        counts = pd.Series(all_orgs).value_counts().head(top_n).reset_index()
-        counts.columns = ["機關名稱", "count"]
-        return counts
-    except Exception as e:
-        print(f"[sheets_sync] load_top_organizations failed: {e}")
-        return pd.DataFrame()
-
-
 # ── Overview for the landing page ─────────────────────────────────────────────
 
 # (label, lower bound inclusive, upper bound exclusive)
@@ -412,7 +322,16 @@ def load_overview(spreadsheet, company_keywords, today):
                            "date": r.get("date", "")})
     recent.sort(key=lambda r: str(r["date"]), reverse=True)
 
+    # Scores for the stats-tab histogram (Series, not ndarray: -1 = scoring failed)
+    score_rows = []
+    for label, df in (("招標", tenders), ("決標", awards)):
+        sc = pd.to_numeric(pd.Series(col(df, "score")), errors="coerce").dropna()
+        score_rows.append(pd.DataFrame({"source": label, "score": sc[sc >= 0]}))
+    scores = pd.concat(score_rows, ignore_index=True)
+
     return {
+        "runs": runs,
+        "scores": scores,
         "total": len(tenders) + len(awards),
         "total_tenders": len(tenders),
         "total_awards": len(awards),
