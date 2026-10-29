@@ -158,6 +158,11 @@ def append_new_records(spreadsheet, df, tab_name, run_id, appended_at, dedup_key
     # before a key column existed still dedups on the remaining keys instead
     # of treating every row as new.
     existing_combos: set = set()
+    # First-key values of sheet rows whose other keys are blank (e.g. rows
+    # from the old PCC scraper had no 招標狀態): such a row can't tell
+    # re-tenders apart, so it matches any incoming row with that first key.
+    wildcard_first: set = set()
+    existing_first: set = set()
     sheet_hdr: list = []
     try:
         sheet_hdr = ws.row_values(1)
@@ -172,13 +177,24 @@ def append_new_records(spreadsheet, df, tab_name, run_id, appended_at, dedup_key
                 parts = [c[i] if i < len(c) else "" for c in cols_data]
                 if any(parts):
                     existing_combos.add("|".join(parts))
+                    existing_first.add(parts[0])
+                    if len(parts) > 1 and parts[0] and not any(parts[1:]):
+                        wildcard_first.add(parts[0])
         except Exception:
             pass
 
     if available_keys:
         # Same normalisation as the write below (NaN -> ""), so keys match
-        incoming = df[available_keys].fillna("").astype(str).agg("|".join, axis=1)
-        new_df = df[~incoming.isin(existing_combos)].copy()
+        keys = df[available_keys].fillna("").astype(str)
+        incoming = keys.agg("|".join, axis=1)
+        first = keys[available_keys[0]]
+        seen = incoming.isin(existing_combos) | first.isin(wildcard_first)
+        if len(available_keys) > 1:
+            # Same in reverse: an incoming row with the other keys blank
+            # (e.g. listing-only fallback) matches on the first key alone.
+            other_blank = (keys[available_keys[1:]] == "").all(axis=1)
+            seen |= other_blank & first.isin(existing_first)
+        new_df = df[~seen].copy()
     else:
         new_df = df.copy()
 

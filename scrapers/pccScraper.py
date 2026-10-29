@@ -190,7 +190,7 @@ class PccScraper:
 
         if self.breaker.is_open:
             msg = (f"政府採購網連續 {self.breaker.failures} 次連線失敗（{self.breaker.last_error}），"
-                   f"已跳過剩餘關鍵字")
+                   f"已跳過剩餘關鍵字，本次結果不完整")
             print(f"PCC: {msg}")
             self.warning = msg
             keyword_placeholder.warning(msg)

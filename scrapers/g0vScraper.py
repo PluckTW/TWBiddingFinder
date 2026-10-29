@@ -92,6 +92,12 @@ class G0vScraper:
             day += timedelta(days=1)
 
 
+    @staticmethod
+    def label_date(date):
+        day = datetime.strptime(str(date), "%Y%m%d")
+        return f"{day.month}/{day.day}({'一二三四五六日'[day.weekday()]})"
+
+
     def list_by_date(self, date):
         api = f"{self.base_url}{self.date_api}date={date}"
         # A whole day's notices is a big response; allow it more read time.
@@ -226,10 +232,12 @@ class G0vScraper:
         problems = []
         if self.breaker.is_open:
             problems.append(f"g0v API 連續 {self.breaker.failures} 次失敗（{self.breaker.last_error}），"
-                            f"已停止讀取剩餘日期")
+                            f"已停止讀取剩餘日期，本次結果不完整")
         if self.failed_dates:
-            problems.append("g0v 以下日期讀取失敗、已跳過："
-                            + "、".join(str(d) for d in self.failed_dates))
+            # g0v answers HTTP 500 for days with no notices (seen on the
+            # 2026-10-24..26 holiday), so this is usually not a real failure
+            problems.append("g0v 以下日期沒有資料（多為假日；若是上班日請重跑）："
+                            + "、".join(self.label_date(d) for d in self.failed_dates))
         if self.detail_failed:
             problems.append(f"g0v 明細查詢 {self.detail_failed}/{self.detail_attempted} 筆失敗，"
                             f"這些標案改用列表資料（缺聯絡人、金額等欄位）")
