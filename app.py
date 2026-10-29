@@ -77,10 +77,50 @@ elif sl.session_state["sheets_available"]:
     _status = "尚無掃描紀錄"
 else:
     _status = "Google Sheets 未連線"
-sl.markdown(theme.nav(_status), unsafe_allow_html=True)
+_side_open = bool(overview) and sl.session_state.get("overview_open", True)
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = sl.tabs(["總覽", "掃描結果", "後台統計"])
+
+def _toggle_overview():
+    sl.session_state["overview_open"] = not sl.session_state.get("overview_open", True)
+
+
+_nav_l, _nav_r = sl.columns([8, 1.2], vertical_alignment="center")
+_nav_l.markdown(theme.nav(_status), unsafe_allow_html=True)
+if overview:
+    _nav_r.button("收合數據總覽 ›" if _side_open else "‹ 數據總覽", on_click=_toggle_overview,
+                  use_container_width=True)
+
+# ── Layout: tabs on the left, collapsible overview panel on the right ────────
+if _side_open:
+    _main, _side = sl.columns([2.75, 1], gap="medium")
+else:
+    _main, _side = sl.container(), None
+tab1, tab2, tab3 = _main.tabs(["總覽", "掃描結果", "後台統計"])
+
+if _side is not None:
+    with _side:
+        sl.markdown('<div class="tw-side-marker"></div>'
+                    + theme.section("標案數據總覽", f"{overview['total']:,} 件 · Google Sheets 累積")
+                    + theme.stack([
+                        theme.card("標案狀態", theme.donut([
+                            ("招標中", overview["open_tenders"], theme.GREEN),
+                            ("已截止", overview["closed_tenders"], "#b8b8b2"),
+                            ("已決標", overview["awarded"], "#8e8e93"),
+                            ("無法決標", overview["failed"], "#c2611f"),
+                        ], "件")),
+                        theme.card("經銷商得標排行", theme.bars(overview["dealer_wins"][:8], color=theme.GREEN,
+                                                               empty="尚無經銷商得標紀錄"), "依得標廠商比對"),
+                        theme.card("決標金額分布", theme.bars(overview["amount_buckets"])),
+                        theme.card("最常發標的機關", theme.bars(overview["top_orgs"], color=theme.GREEN), "TOP 8"),
+                    ]), unsafe_allow_html=True)
+
+
+@sl.dialog("資料來源連線診斷", width="large")
+def _diagnostics_dialog():
+    sl.caption("從這台伺服器實際連一次 g0v API 與政府採購網")
+    with sl.spinner("診斷中…約需 1 分鐘"):
+        rows = diagnostics.run(CONFIG_PATH)
+    sl.dataframe(rows, use_container_width=True, hide_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -92,10 +132,11 @@ with tab1:
         sl.markdown(theme.hero_text(len(sl.session_state["title_keywords"]),
                                     len(sl.session_state["company_keywords"])),
                     unsafe_allow_html=True)
-        with sl.form("設定"):
-            _c_date, _c_btn = sl.columns([3, 1], vertical_alignment="bottom")
-            start_date = _c_date.date_input("從哪一天開始掃描", value=None, max_value=today_date)
-            s_state = _c_btn.form_submit_button("開始掃描", use_container_width=True)
+        # No columns in here: this is already two column levels deep, which is
+        # Streamlit's limit; theme.CSS lays the form out in one row instead.
+        with sl.form("scan_form"):
+            start_date = sl.date_input("從哪一天開始掃描", value=None, max_value=today_date)
+            s_state = sl.form_submit_button("開始掃描")
         sl.markdown(theme.chips("產品關鍵字", sl.session_state["title_keywords"], limit=7)
                     + theme.chips("經銷商", sl.session_state["company_keywords"], dealer=True, limit=6),
                     unsafe_allow_html=True)
@@ -122,7 +163,9 @@ with tab1:
             _items, _cap = overview["recent"], f"最近收錄 {len(overview['recent'])} 筆"
         else:
             _cap = "示意畫面 · 掃描後顯示實際標案"
-        components.html(radar.html(_items, _cap), height=440)
+        components.html(radar.html(_items, _cap), height=525)
+        if sl.button("🔧 資料來源連線診斷", use_container_width=True):
+            _diagnostics_dialog()
 
     if s_state:
         if start_date is None or start_date > today_date:
@@ -254,31 +297,6 @@ with tab1:
              f"{_top_dealer[0]} 最多（{_top_dealer[1]} 件）" if _top_dealer
              else f"最大決標 {theme.money(overview['max_amount'])}"),
         ]), unsafe_allow_html=True)
-
-        sl.markdown(theme.section("標案數據總覽",
-                                  f"{overview['total']:,} 件 · 來源 Google Sheets 累積資料"),
-                    unsafe_allow_html=True)
-        sl.markdown(theme.grid([
-            theme.card("標案狀態", theme.donut([
-                ("招標中", overview["open_tenders"], theme.GREEN),
-                ("已截止", overview["closed_tenders"], "#b8b8b2"),
-                ("已決標", overview["awarded"], "#8e8e93"),
-                ("無法決標", overview["failed"], "#c2611f"),
-            ], "件")),
-            theme.card("決標金額分布", theme.bars(overview["amount_buckets"])),
-            theme.card("經銷商得標排行", theme.bars(overview["dealer_wins"][:8], color=theme.GREEN,
-                                                   empty="尚無經銷商得標紀錄"), "依得標廠商比對"),
-            theme.card("最常發標的機關", theme.bars(overview["top_orgs"], color=theme.GREEN), "TOP 8"),
-        ]), unsafe_allow_html=True)
-
-    sl.write("")
-    with sl.expander("🔧 資料來源連線診斷"):
-        sl.caption("從這台伺服器實際連一次 g0v API 與政府採購網，約需 1 分鐘")
-        if sl.button("執行診斷"):
-            with sl.spinner("診斷中…"):
-                sl.session_state["diagnostics"] = diagnostics.run(CONFIG_PATH)
-        if sl.session_state.get("diagnostics"):
-            sl.dataframe(sl.session_state["diagnostics"], use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

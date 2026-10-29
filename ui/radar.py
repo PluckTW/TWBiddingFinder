@@ -73,7 +73,7 @@ def html(items=None, caption=""):
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{{margin:0;background:transparent;font-family:'Noto Sans TC',-apple-system,'PingFang TC',sans-serif;}}
 .wrap{{display:flex;flex-direction:column;align-items:center;}}
-svg{{width:100%;max-width:380px;height:auto;overflow:visible;}}
+svg{{width:100%;max-width:460px;height:auto;overflow:visible;}}
 .disc{{fill:url(#bg);stroke:#d5e9de;stroke-width:1.2;}}
 .ring{{fill:none;stroke:#cfe5d8;stroke-width:1;}}
 .spoke{{stroke:#dcece3;stroke-width:1;}}

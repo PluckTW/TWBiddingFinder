@@ -14,7 +14,8 @@ html, body, .stApp, .stMarkdown, button, input, textarea {
   font-family:'Noto Sans TC',-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif; }
 .stApp { background:var(--bg); }
 header[data-testid="stHeader"] { background:transparent; }
-.block-container { max-width:1180px; padding-top:1.4rem; }
+/* desktop 16:9: use the full width */
+.block-container { max-width:none; padding:3.4rem 2.4rem 2rem; }
 footer { visibility:hidden; }
 
 /* tabs as nav pills */
@@ -29,6 +30,11 @@ footer { visibility:hidden; }
 [data-testid="stFormSubmitButton"] > button {
   background:var(--green); color:#fff; border:0; border-radius:10px; font-weight:700; height:42px; }
 [data-testid="stFormSubmitButton"] > button:hover { background:#08845c; color:#fff; }
+/* the scan form (the app's only form): date + button on one row */
+[data-testid="stForm"] [data-testid="stVerticalBlock"] { flex-direction:row; align-items:flex-end; gap:12px; }
+[data-testid="stForm"] [data-testid="stVerticalBlock"] > div:first-child { flex:1 1 auto !important; width:auto !important; min-width:0; }
+[data-testid="stForm"] [data-testid="stVerticalBlock"] > div:last-child { flex:0 0 160px !important; width:160px !important; }
+[data-testid="stForm"] [data-testid="stFormSubmitButton"] > button { min-width:150px; }
 [data-testid="stForm"] { background:#fff; border:1px solid var(--line); border-radius:16px;
   box-shadow:0 2px 10px rgba(0,0,0,.04); padding:14px 18px; }
 [data-testid="stExpander"] details { background:#fff; border:1px solid var(--line); border-radius:14px; }
@@ -61,7 +67,16 @@ footer { visibility:hidden; }
 .tw-section h3 { font-size:24px; font-weight:900; margin:0; color:var(--ink); }
 .tw-section .meta { font-size:13px; color:var(--muted); }
 .tw-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:12px; }
-@media (max-width: 760px) { .tw-grid { grid-template-columns:1fr; } .tw-hero-title { font-size:32px; } }
+.tw-stack { display:flex; flex-direction:column; gap:14px; margin-top:10px; }
+
+/* right-hand overview panel: the column holding .tw-side-marker sticks
+   below the nav and scrolls on its own */
+div[data-testid="stColumn"]:has(.tw-side-marker) {
+  position:sticky; top:3.2rem; align-self:flex-start; max-height:calc(100vh - 4rem);
+  overflow-y:auto; background:#efefe9; border:1px solid var(--line); border-radius:18px; padding:14px 14px 18px; }
+div[data-testid="stColumn"]:has(.tw-side-marker) .tw-section { margin-top:4px; }
+div[data-testid="stColumn"]:has(.tw-side-marker) .tw-card { padding:14px 16px; }
+.tw-side-marker { display:none; }
 .tw-card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:18px 20px; }
 .tw-card .ttl { font-size:15px; font-weight:700; margin:0 0 14px; color:var(--ink); display:flex;
   justify-content:space-between; align-items:baseline; }
@@ -179,6 +194,10 @@ def card(title, body, note=""):
 
 def grid(cards):
     return '<div class="tw-grid">' + "".join(cards) + '</div>'
+
+
+def stack(cards):
+    return '<div class="tw-stack">' + "".join(cards) + '</div>'
 
 
 def money(amount):
