@@ -150,7 +150,7 @@ with tab1:
                         try:
                             t_new = sheets_sync.append_new_records(
                                 _sp, tenders_df, "Tenders_RAW", _run_id, _ts,
-                                dedup_keys=["job_number", "招標次數"],
+                                dedup_keys=["job_number", "招標資料:招標次數"],
                             )
                         except Exception as e:
                             sl.warning(f"招標資料 Sheets 同步失敗（資料仍可從結果頁下載）：{e}")
