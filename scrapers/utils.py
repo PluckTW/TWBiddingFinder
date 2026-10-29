@@ -40,11 +40,18 @@ class CircuitBreaker:
 DEFAULT_TIMEOUT = (10, 30)
 
 
-def request(api, timeout=DEFAULT_TIMEOUT, breaker=None, headers=None):
+def request(api, timeout=DEFAULT_TIMEOUT, breaker=None, headers=None,
+            retries=5, http_errors_trip_breaker=True):
+    """GET with retry on 429/5xx. Returns the response on 200, else None.
+
+    http_errors_trip_breaker=False: a 429/5xx that outlasts the retries
+    doesn't count toward the breaker (only network errors do) — for calls
+    where one request failing says nothing about the host, e.g. one day's
+    listing.
+    """
     if breaker is not None and breaker.is_open:
         return None
 
-    retries = 5
     backoff = 2
     attempt = 0
     while attempt < retries:
@@ -70,6 +77,6 @@ def request(api, timeout=DEFAULT_TIMEOUT, breaker=None, headers=None):
             return None
 
     print(f"Max retries reached for {api}. Returning None.")
-    if breaker is not None:
+    if breaker is not None and http_errors_trip_breaker:
         breaker.record_failure(f"HTTP {response.status_code}")
     return None
