@@ -46,6 +46,7 @@ class G0vScraper:
         self.warning = None  # shown on the results tab when a source failed
         self.detail_attempted = 0
         self.detail_failed = 0
+        self.failed_dates = []
 
 
     @property
@@ -94,10 +95,15 @@ class G0vScraper:
     def list_by_date(self, date):
         api = f"{self.base_url}{self.date_api}date={date}"
         # A whole day's notices is a big response; allow it more read time.
+        # Some days answer HTTP 500 (seen on a weekend run) while the next day
+        # works, so a day's error skips only that day; only network errors
+        # count toward stopping the whole run.
         response = scrapers.utils.request(api, timeout=(10, 90), breaker=self.breaker,
-                                          headers=self.headers)
+                                          headers=self.headers, retries=2,
+                                          http_errors_trip_breaker=False)
         if response is None:
             print(f"g0v: listbydate failed for {date}, skipping.")
+            self.failed_dates.append(date)
             return []
         try:
             return response.json().get('records', []) or []
@@ -217,15 +223,18 @@ class G0vScraper:
         new_award_df = pd.concat(award_frames, ignore_index=True) if award_frames else pd.DataFrame()
         new_tender_df = new_tender_df.rename(columns={'機關資料:機關名稱': '機關名稱'})
 
+        problems = []
         if self.breaker.is_open:
-            msg = (f"g0v API 連續 {self.breaker.failures} 次失敗（{self.breaker.last_error}），"
-                   f"已停止讀取剩餘日期")
-            print(f"g0v: {msg}")
-            self.warning = msg
-            status.warning(msg)
-        elif self.detail_attempted and self.detail_failed == self.detail_attempted:
-            msg = (f"g0v 明細查詢 {self.detail_failed} 筆全部失敗，已改用列表資料"
-                   f"（缺聯絡人、金額等欄位）")
+            problems.append(f"g0v API 連續 {self.breaker.failures} 次失敗（{self.breaker.last_error}），"
+                            f"已停止讀取剩餘日期")
+        if self.failed_dates:
+            problems.append("g0v 以下日期讀取失敗、已跳過："
+                            + "、".join(str(d) for d in self.failed_dates))
+        if self.detail_failed:
+            problems.append(f"g0v 明細查詢 {self.detail_failed}/{self.detail_attempted} 筆失敗，"
+                            f"這些標案改用列表資料（缺聯絡人、金額等欄位）")
+        if problems:
+            msg = "；".join(problems)
             print(f"g0v: {msg}")
             self.warning = msg
             status.warning(msg)
