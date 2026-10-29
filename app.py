@@ -77,10 +77,50 @@ elif sl.session_state["sheets_available"]:
     _status = "尚無掃描紀錄"
 else:
     _status = "Google Sheets 未連線"
-sl.markdown(theme.nav(_status), unsafe_allow_html=True)
+_side_open = bool(overview) and sl.session_state.get("overview_open", True)
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = sl.tabs(["總覽", "掃描結果", "後台統計"])
+
+def _toggle_overview():
+    sl.session_state["overview_open"] = not sl.session_state.get("overview_open", True)
+
+
+_nav_l, _nav_r = sl.columns([8, 1.2], vertical_alignment="center")
+_nav_l.markdown(theme.nav(_status), unsafe_allow_html=True)
+if overview:
+    _nav_r.button("收合數據總覽 ›" if _side_open else "‹ 數據總覽", on_click=_toggle_overview,
+                  use_container_width=True)
+
+# ── Layout: tabs on the left, collapsible overview panel on the right ────────
+if _side_open:
+    _main, _side = sl.columns([2.75, 1], gap="medium")
+else:
+    _main, _side = sl.container(), None
+tab1, tab2, tab3 = _main.tabs(["總覽", "掃描結果", "後台統計"])
+
+if _side is not None:
+    with _side:
+        sl.markdown('<div class="tw-side-marker"></div>'
+                    + theme.section("標案數據總覽", f"{overview['total']:,} 件 · Google Sheets 累積")
+                    + theme.stack([
+                        theme.card("標案狀態", theme.donut([
+                            ("招標中", overview["open_tenders"], theme.GREEN),
+                            ("已截止", overview["closed_tenders"], "#b8b8b2"),
+                            ("已決標", overview["awarded"], "#8e8e93"),
+                            ("無法決標", overview["failed"], "#c2611f"),
+                        ], "件")),
+                        theme.card("經銷商得標排行", theme.bars(overview["dealer_wins"][:8], color=theme.GREEN,
+                                                               empty="尚無經銷商得標紀錄"), "依得標廠商比對"),
+                        theme.card("決標金額分布", theme.bars(overview["amount_buckets"])),
+                        theme.card("最常發標的機關", theme.bars(overview["top_orgs"], color=theme.GREEN), "TOP 8"),
+                    ]), unsafe_allow_html=True)
+
+
+@sl.dialog("資料來源連線診斷", width="large")
+def _diagnostics_dialog():
+    sl.caption("從這台伺服器實際連一次 g0v API 與政府採購網")
+    with sl.spinner("診斷中…約需 1 分鐘"):
+        rows = diagnostics.run(CONFIG_PATH)
+    sl.dataframe(rows, use_container_width=True, hide_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -92,10 +132,11 @@ with tab1:
         sl.markdown(theme.hero_text(len(sl.session_state["title_keywords"]),
                                     len(sl.session_state["company_keywords"])),
                     unsafe_allow_html=True)
-        with sl.form("設定"):
-            _c_date, _c_btn = sl.columns([3, 1], vertical_alignment="bottom")
-            start_date = _c_date.date_input("從哪一天開始掃描", value=None, max_value=today_date)
-            s_state = _c_btn.form_submit_button("開始掃描", use_container_width=True)
+        # No columns in here: this is already two column levels deep, which is
+        # Streamlit's limit; theme.CSS lays the form out in one row instead.
+        with sl.form("scan_form"):
+            start_date = sl.date_input("從哪一天開始掃描", value=None, max_value=today_date)
+            s_state = sl.form_submit_button("開始掃描")
         sl.markdown(theme.chips("產品關鍵字", sl.session_state["title_keywords"], limit=7)
                     + theme.chips("經銷商", sl.session_state["company_keywords"], dealer=True, limit=6),
                     unsafe_allow_html=True)
@@ -122,7 +163,9 @@ with tab1:
             _items, _cap = overview["recent"], f"最近收錄 {len(overview['recent'])} 筆"
         else:
             _cap = "示意畫面 · 掃描後顯示實際標案"
-        components.html(radar.html(_items, _cap), height=440)
+        components.html(radar.html(_items, _cap), height=525)
+        if sl.button("🔧 資料來源連線診斷", use_container_width=True):
+            _diagnostics_dialog()
 
     if s_state:
         if start_date is None or start_date > today_date:
@@ -231,7 +274,6 @@ with tab1:
                     sl.session_state["tenders_new"]  = t_new
                     sl.session_state["awards_new"]   = a_new
                     # Invalidate stats cache so Tab 3 reflects the new run
-                    sl.session_state.pop("stats_data", None)
                     _overview.clear()
 
                 # ── Persist & rerun ───────────────────────────────────────────
@@ -254,31 +296,6 @@ with tab1:
              f"{_top_dealer[0]} 最多（{_top_dealer[1]} 件）" if _top_dealer
              else f"最大決標 {theme.money(overview['max_amount'])}"),
         ]), unsafe_allow_html=True)
-
-        sl.markdown(theme.section("標案數據總覽",
-                                  f"{overview['total']:,} 件 · 來源 Google Sheets 累積資料"),
-                    unsafe_allow_html=True)
-        sl.markdown(theme.grid([
-            theme.card("標案狀態", theme.donut([
-                ("招標中", overview["open_tenders"], theme.GREEN),
-                ("已截止", overview["closed_tenders"], "#b8b8b2"),
-                ("已決標", overview["awarded"], "#8e8e93"),
-                ("無法決標", overview["failed"], "#c2611f"),
-            ], "件")),
-            theme.card("決標金額分布", theme.bars(overview["amount_buckets"])),
-            theme.card("經銷商得標排行", theme.bars(overview["dealer_wins"][:8], color=theme.GREEN,
-                                                   empty="尚無經銷商得標紀錄"), "依得標廠商比對"),
-            theme.card("最常發標的機關", theme.bars(overview["top_orgs"], color=theme.GREEN), "TOP 8"),
-        ]), unsafe_allow_html=True)
-
-    sl.write("")
-    with sl.expander("🔧 資料來源連線診斷"):
-        sl.caption("從這台伺服器實際連一次 g0v API 與政府採購網，約需 1 分鐘")
-        if sl.button("執行診斷"):
-            with sl.spinner("診斷中…"):
-                sl.session_state["diagnostics"] = diagnostics.run(CONFIG_PATH)
-        if sl.session_state.get("diagnostics"):
-            sl.dataframe(sl.session_state["diagnostics"], use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -418,65 +435,77 @@ with tab3:
             "**Keywords 分頁格式**：`keyword` | `type`（title/company）| `active`（TRUE/FALSE）| `notes`"
         )
     else:
-        _sp3 = sl.session_state["spreadsheet"]
+        def _refresh_stats():
+            _overview.clear()
 
-        # Toolbar row
-        _col_refresh, _col_link = sl.columns([1, 3])
-        with _col_refresh:
-            if sl.button("🔄 刷新統計"):
-                with sl.spinner("讀取後台統計…"):
-                    try:
-                        sl.session_state["stats_data"] = {
-                            "history":    sheets_sync.load_run_history(_sp3),
-                            "score_dist": sheets_sync.load_score_distribution(_sp3),
-                        }
-                        _overview.clear()
-                    except Exception as _e:
-                        sl.warning(f"統計讀取失敗：{_e}")
+        _t1, _t2, _ = sl.columns([1, 1.6, 5], vertical_alignment="center")
+        _t1.button("🔄 重新讀取 Sheet", on_click=_refresh_stats, use_container_width=True)
+        try:
+            _sheet_id = sl.secrets.get("GOOGLE_SHEET_ID")
+            if _sheet_id:
+                _t2.link_button("📊 在 Google Sheets 查看完整資料",
+                                f"https://docs.google.com/spreadsheets/d/{_sheet_id}",
+                                use_container_width=True)
+        except Exception:
+            pass
 
-        with _col_link:
-            try:
-                _sheet_id = sl.secrets.get("GOOGLE_SHEET_ID")
-                if _sheet_id:
-                    sl.link_button(
-                        "📊 在 Google Sheets 查看完整資料",
-                        f"https://docs.google.com/spreadsheets/d/{_sheet_id}",
-                    )
-            except Exception:
-                pass
-
-        if "stats_data" not in sl.session_state:
-            sl.info("點選「🔄 刷新統計」載入後台累積資料")
+        _runs = overview["runs"] if overview else pd.DataFrame()
+        if _runs.empty:
+            sl.info("尚無執行紀錄")
         else:
-            _data = sl.session_state["stats_data"]
+            _rl = _runs.copy()
+            for _c in ("tenders_scraped", "awards_scraped", "tenders_new", "awards_new"):
+                _rl[_c] = pd.to_numeric(_rl.get(_c), errors="coerce").fillna(0).astype(int)
+            _rl["新增"] = _rl["tenders_new"] + _rl["awards_new"]
+            _last = _rl.iloc[-1]
+            _failed = int(_rl.get("score_failed", pd.Series(dtype=str)).astype(str).str.lower().eq("true").sum())
+            sl.markdown(theme.kpis([
+                ("dark", "總掃描次數", f"{len(_rl):,}", f"第一次 {str(_rl['run_at'].iloc[0])[:10]}"),
+                ("green", "最近一次新增", f"{_last['新增']:,}",
+                 f"{str(_last['run_at'])[5:16].replace('T', ' ')} · 招標 {_last['tenders_new']} · 決標 {_last['awards_new']}"),
+                ("gray", "平均每次新增", f"{_rl['新增'].mean():.0f}",
+                 f"AI 評分失敗 {_failed} 次" if _failed else "AI 評分全部成功"),
+            ]), unsafe_allow_html=True)
 
-            # Run history
-            sl.markdown(theme.section("最近執行紀錄"), unsafe_allow_html=True)
-            _hist = _data["history"]
-            if _hist.empty:
-                sl.info("尚無執行紀錄")
-            else:
-                sl.dataframe(_hist, use_container_width=True)
+            _axis = alt.Axis(labelColor="#6e6e73", titleColor="#6e6e73", gridColor="#efefea", domain=False)
+            _colors = alt.Scale(domain=["招標", "決標"], range=[theme.GREEN, "#c2611f"])
+            _cl, _cr = sl.columns(2, gap="medium")
+            with _cl:
+                sl.markdown(theme.section("每次掃描新增筆數", "最近 20 次"), unsafe_allow_html=True)
+                _trend = _rl.tail(20).assign(時間=lambda d: d["run_at"].astype(str).str[5:16].str.replace("T", " "))
+                _trend = _trend.melt(id_vars=["時間"], value_vars=["tenders_new", "awards_new"],
+                                     var_name="類型", value_name="筆數")
+                _trend["類型"] = _trend["類型"].map({"tenders_new": "招標", "awards_new": "決標"})
+                sl.altair_chart(alt.Chart(_trend).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+                    alt.X("時間:N", sort=None, title=None, axis=alt.Axis(labelAngle=-40, labelColor="#6e6e73")),
+                    alt.Y("筆數:Q", title="新增筆數", axis=_axis),
+                    alt.Color("類型:N", scale=_colors, legend=alt.Legend(orient="top", title=None)),
+                    tooltip=["時間", "類型", "筆數"],
+                ).properties(height=280), use_container_width=True)
+            with _cr:
+                sl.markdown(theme.section("AI 相關度分數分佈", "-1（評分失敗）已排除"), unsafe_allow_html=True)
+                _sd = overview["scores"]
+                if _sd.empty:
+                    sl.info("尚無評分資料")
+                else:
+                    sl.altair_chart(alt.Chart(_sd).mark_bar(opacity=0.85, cornerRadiusTopLeft=3,
+                                                           cornerRadiusTopRight=3).encode(
+                        alt.X("score:Q", bin=alt.Bin(step=10), title="相關度分數", axis=_axis),
+                        alt.Y("count():Q", title="件數", axis=_axis),
+                        alt.Color("source:N", scale=_colors, legend=alt.Legend(orient="top", title=None)),
+                        tooltip=[alt.Tooltip("source:N", title="類型"), alt.Tooltip("count():Q", title="件數")],
+                    ).properties(height=280), use_container_width=True)
 
-            # Score distribution
-            sl.markdown(theme.section("AI 相關度分數分佈"), unsafe_allow_html=True)
-            _sd = _data["score_dist"]
-            if _sd.empty:
-                sl.info("尚無評分資料（-1 為評分失敗，已排除）")
-            else:
-                _chart = (
-                    alt.Chart(_sd)
-                    .mark_bar(opacity=0.85, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-                    .encode(
-                        alt.X("score:Q", bin=alt.Bin(step=10), title="相關度分數"),
-                        alt.Y("count():Q", title="件數"),
-                        alt.Color("source:N", title="類型",
-                                  scale=alt.Scale(domain=["招標", "決標"], range=[theme.GREEN, "#c2611f"])),
-                        tooltip=[
-                            alt.Tooltip("source:N", title="類型"),
-                            alt.Tooltip("count():Q", title="件數"),
-                        ],
-                    )
-                    .properties(height=300)
-                )
-                sl.altair_chart(_chart, use_container_width=True)
+            sl.markdown(theme.section("執行紀錄", f"共 {len(_rl)} 次 · 新到舊"), unsafe_allow_html=True)
+            _hist = _rl.iloc[::-1].copy()
+            _hist["時間"] = _hist["run_at"].astype(str).str[:16].str.replace("T", " ")
+            _hist["掃描區間"] = (_hist.get("start_date", "").astype(str).str[4:].str.replace(r"(\d\d)(\d\d)", r"\1/\2", regex=True)
+                               + " – " + _hist.get("end_date", "").astype(str).str[4:].str.replace(r"(\d\d)(\d\d)", r"\1/\2", regex=True))
+            if "score_failed" in _hist.columns:
+                _hist["score_failed"] = _hist["score_failed"].astype(str).str.lower().map({"true": "是"}).fillna("")
+            _hist = _hist.rename(columns={"tenders_scraped": "招標（抓到）", "awards_scraped": "決標（抓到）",
+                                          "tenders_new": "招標（新增）", "awards_new": "決標（新增）",
+                                          "ai_provider": "AI 模型", "score_failed": "評分失敗"})
+            sl.dataframe(_hist[[c for c in ["時間", "掃描區間", "招標（抓到）", "決標（抓到）", "招標（新增）",
+                                            "決標（新增）", "AI 模型", "評分失敗"] if c in _hist.columns]],
+                         hide_index=True, use_container_width=True)
