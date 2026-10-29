@@ -2,3 +2,4 @@ venv/
 config/gpt_key.txt
 __pycache__/
 *.pyc
+.streamlit/secrets.toml
