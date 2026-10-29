@@ -1,4 +1,5 @@
 import streamlit as sl
+import threading
 import uuid
 import pytz
 import altair as alt
@@ -18,6 +19,14 @@ sl.set_page_config(page_title="標案下載", page_icon="🐄", layout="wide")
 _tz_taipei = pytz.timezone("Asia/Taipei")
 today_date = datetime.now(pytz.utc).astimezone(_tz_taipei).date()
 _AI_THRESHOLD_DEFAULT = 70
+
+
+@sl.cache_resource
+def _scrape_lock():
+    # One lock shared by every browser session on this server, so two
+    # colleagues (or a page refresh) can't run overlapping scrapes that
+    # double the load on the source sites and trip their rate limits.
+    return threading.Lock()
 
 # ── Sheets auth (once per session) ───────────────────────────────────────────
 if "sheets_available" not in sl.session_state:
@@ -74,94 +83,102 @@ with tab1:
     if s_state:
         if start_date is None or start_date > today_date:
             sl.warning("請輸入有效開始日期！")
+        elif not _scrape_lock().acquire(blocking=False):
+            sl.warning("另一位同事正在執行抓取，請等對方完成後再試。")
         else:
-            formatted_date = int(start_date.strftime("%Y%m%d"))
+            try:
+                formatted_date = int(start_date.strftime("%Y%m%d"))
 
-            # ── Scrape ────────────────────────────────────────────────────
-            g0vScraper = G0vScraper(formatted_date, CONFIG_PATH)
-            g0vTenderDf, g0vAwardDf = g0vScraper.run_scraper()
+                # ── Scrape ────────────────────────────────────────────────────
+                g0vScraper = G0vScraper(formatted_date, CONFIG_PATH)
+                g0vTenderDf, g0vAwardDf = g0vScraper.run_scraper()
 
-            pccScraper = PccScraper(formatted_date, CONFIG_PATH)
-            pccTenderDf, pccAwardDf = pccScraper.run_scraper()
+                pccScraper = PccScraper(formatted_date, CONFIG_PATH)
+                pccTenderDf, pccAwardDf = pccScraper.run_scraper()
+                source_warnings = [w for w in (g0vScraper.warning, pccScraper.warning) if w]
 
-            scrapeDataMerger = PccG0vMerger(pccTenderDf, pccAwardDf, g0vTenderDf, g0vAwardDf)
-            tenders_df, awards_df = scrapeDataMerger.run_merger()
-            delete_duplicates(tenders_df, awards_df)
+                scrapeDataMerger = PccG0vMerger(pccTenderDf, pccAwardDf, g0vTenderDf, g0vAwardDf)
+                tenders_df, awards_df = scrapeDataMerger.run_merger()
+                delete_duplicates(tenders_df, awards_df)
 
-            # ── AI Score ──────────────────────────────────────────────────
-            tender_titles = tenders_df["title"].tolist() if "title" in tenders_df.columns else []
-            award_titles  = awards_df["title"].tolist()  if "title" in awards_df.columns  else []
+                # ── AI Score ──────────────────────────────────────────────────
+                tender_titles = tenders_df["title"].tolist() if "title" in tenders_df.columns else []
+                award_titles  = awards_df["title"].tolist()  if "title" in awards_df.columns  else []
 
-            n_tender = len([t for t in tender_titles if isinstance(t, str) and t.strip()])
-            n_award  = len([t for t in award_titles  if isinstance(t, str) and t.strip()])
-            total_valid = n_tender + n_award
-            progress_bar = sl.progress(0.0, text="AI 評分中…")
-            _progress_state = {"base": 0}
+                n_tender = len([t for t in tender_titles if isinstance(t, str) and t.strip()])
+                n_award  = len([t for t in award_titles  if isinstance(t, str) and t.strip()])
+                total_valid = n_tender + n_award
+                progress_bar = sl.progress(0.0, text="AI 評分中…")
+                _progress_state = {"base": 0}
 
-            def _update_progress(done, _total):
-                overall = _progress_state["base"] + done
-                frac = overall / total_valid if total_valid else 1.0
-                progress_bar.progress(min(frac, 1.0), text=f"AI 評分中… {overall}/{total_valid}")
+                def _update_progress(done, _total):
+                    overall = _progress_state["base"] + done
+                    frac = overall / total_valid if total_valid else 1.0
+                    progress_bar.progress(min(frac, 1.0), text=f"AI 評分中… {overall}/{total_valid}")
 
-            tender_score = score_titles(tender_titles, progress_callback=_update_progress)
-            _progress_state["base"] = n_tender
-            award_score  = score_titles(award_titles, progress_callback=_update_progress)
-            progress_bar.empty()
+                tender_score = score_titles(tender_titles, progress_callback=_update_progress)
+                _progress_state["base"] = n_tender
+                award_score  = score_titles(award_titles, progress_callback=_update_progress)
+                progress_bar.empty()
 
-            tenders_df.insert(0, "score", tender_score)
-            awards_df.insert(0, "score", award_score)
+                tenders_df.insert(0, "score", tender_score)
+                awards_df.insert(0, "score", award_score)
 
-            # Persist scoring outcome so it survives rerun() into Tab 2
-            if tenders_df["score"].isna().all() and awards_df["score"].isna().all():
-                sl.session_state["score_failed"] = True
-                sl.session_state["score_diag"] = get_diagnostics()
-                sl.session_state["score_provider"] = None
-            else:
-                sl.session_state["score_failed"] = False
-                sl.session_state["score_diag"] = None
-                sl.session_state["score_provider"] = get_last_provider()
+                # Persist scoring outcome so it survives rerun() into Tab 2
+                # Nothing scraped means nothing to score — not a scoring failure
+                if total_valid and tenders_df["score"].isna().all() and awards_df["score"].isna().all():
+                    sl.session_state["score_failed"] = True
+                    sl.session_state["score_diag"] = get_diagnostics()
+                    sl.session_state["score_provider"] = None
+                else:
+                    sl.session_state["score_failed"] = False
+                    sl.session_state["score_diag"] = None
+                    sl.session_state["score_provider"] = get_last_provider()
 
-            tenders_df["score"] = tenders_df["score"].fillna(-1).astype(int)
-            awards_df["score"]  = awards_df["score"].fillna(-1).astype(int)
+                tenders_df["score"] = tenders_df["score"].fillna(-1).astype(int)
+                awards_df["score"]  = awards_df["score"].fillna(-1).astype(int)
 
-            # ── Google Sheets push ────────────────────────────────────────
-            t_new = 0
-            a_new = 0
-            if sl.session_state["sheets_available"]:
-                _sp = sl.session_state["spreadsheet"]
-                _run_id = str(uuid.uuid4())
-                _ts = datetime.now(_tz_taipei).isoformat()
-                try:
-                    with sl.spinner("同步至 Google Sheets…"):
-                        t_new = sheets_sync.append_new_records(_sp, tenders_df, "Tenders_RAW", _run_id, _ts)
-                        a_new = sheets_sync.append_new_records(_sp, awards_df,  "Awards_RAW",  _run_id, _ts)
-                        sheets_sync.append_run_log(_sp, {
-                            "run_id":           _run_id,
-                            "run_at":           _ts,
-                            "start_date":       formatted_date,
-                            "end_date":         int(today_date.strftime("%Y%m%d")),
-                            "tenders_scraped":  len(tenders_df),
-                            "awards_scraped":   len(awards_df),
-                            "tenders_new":      t_new,
-                            "awards_new":       a_new,
-                            "ai_provider":      sl.session_state.get("score_provider") or "FAILED",
-                            "score_failed":     sl.session_state.get("score_failed", False),
-                        })
-                except Exception as e:
-                    sl.warning(f"Google Sheets 同步失敗（資料仍可從結果頁下載）：{e}")
+                # ── Google Sheets push ────────────────────────────────────────
+                t_new = 0
+                a_new = 0
+                if sl.session_state["sheets_available"]:
+                    _sp = sl.session_state["spreadsheet"]
+                    _run_id = str(uuid.uuid4())
+                    _ts = datetime.now(_tz_taipei).isoformat()
+                    try:
+                        with sl.spinner("同步至 Google Sheets…"):
+                            t_new = sheets_sync.append_new_records(_sp, tenders_df, "Tenders_RAW", _run_id, _ts)
+                            a_new = sheets_sync.append_new_records(_sp, awards_df,  "Awards_RAW",  _run_id, _ts)
+                            sheets_sync.append_run_log(_sp, {
+                                "run_id":           _run_id,
+                                "run_at":           _ts,
+                                "start_date":       formatted_date,
+                                "end_date":         int(today_date.strftime("%Y%m%d")),
+                                "tenders_scraped":  len(tenders_df),
+                                "awards_scraped":   len(awards_df),
+                                "tenders_new":      t_new,
+                                "awards_new":       a_new,
+                                "ai_provider":      sl.session_state.get("score_provider") or "FAILED",
+                                "score_failed":     sl.session_state.get("score_failed", False),
+                            })
+                    except Exception as e:
+                        sl.warning(f"Google Sheets 同步失敗（資料仍可從結果頁下載）：{e}")
 
-                sl.session_state["run_id"]       = _run_id
-                sl.session_state["tenders_new"]  = t_new
-                sl.session_state["awards_new"]   = a_new
-                # Invalidate stats cache so Tab 3 reflects the new run
-                sl.session_state.pop("stats_data", None)
+                    sl.session_state["run_id"]       = _run_id
+                    sl.session_state["tenders_new"]  = t_new
+                    sl.session_state["awards_new"]   = a_new
+                    # Invalidate stats cache so Tab 3 reflects the new run
+                    sl.session_state.pop("stats_data", None)
 
-            # ── Persist & rerun ───────────────────────────────────────────
-            sl.session_state["tender"]          = tenders_df
-            sl.session_state["award"]           = awards_df
-            sl.session_state["scraping_status"] = "done"
-            sl.session_state["ai_threshold"]    = _AI_THRESHOLD_DEFAULT
-            sl.rerun()
+                # ── Persist & rerun ───────────────────────────────────────────
+                sl.session_state["tender"]          = tenders_df
+                sl.session_state["award"]           = awards_df
+                sl.session_state["source_warnings"] = source_warnings
+                sl.session_state["scraping_status"] = "done"
+                sl.session_state["ai_threshold"]    = _AI_THRESHOLD_DEFAULT
+                sl.rerun()
+            finally:
+                _scrape_lock().release()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -171,6 +188,10 @@ with tab2:
     if sl.session_state.get("scraping_status") != "done":
         sl.info("請先在 ⚙️ 設定頁選擇日期並執行抓取。")
     else:
+        # Data source failures (site unreachable, API rate limit, ...)
+        for _w in sl.session_state.get("source_warnings") or []:
+            sl.warning(f"⚠️ {_w}，本次結果可能不完整。")
+
         # AI scoring status banner
         if sl.session_state.get("score_failed"):
             sl.warning("⚠️ AI 評分全部失敗（所有模型 API 連線或金鑰問題），score 欄位顯示為 -1，篩選功能暫時無效。")

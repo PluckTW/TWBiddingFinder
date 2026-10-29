@@ -3,7 +3,7 @@ import pandas as pd
 import re
 import scrapers.utils
 from bs4 import BeautifulSoup
-from config.configLoader import TITLE_KEYWORDS, COMPANY_KEYWORDS, AWARD_SELECTED_COLUMNS, TENDER_SELECTED_COLUMNS, NOT_AWARD_SELECTED_COLUMNS
+import config.configLoader as cfg
 
 
 class PccScraper:
@@ -13,6 +13,8 @@ class PccScraper:
         self.listing_base_url = self.config['websites']['pcc_gov']['listing_base_url']
         self.start_date = start_date
         self.search_year_minguo = (start_date//10000)-1911
+        self.breaker = scrapers.utils.CircuitBreaker("政府採購網")
+        self.warning = None  # shown on the results tab when a source failed
 
     def _parse_award_rows(self, tbody):
         """Extract award/no-award rows from a <tbody>. Returns (names already parsed
@@ -79,7 +81,7 @@ class PccScraper:
 
     def _fetch_award_df(self, query_strings, keyword, award_names):
         """Fetch one award search page and return a DataFrame (empty on failure)."""
-        response = scrapers.utils.request(self.listing_base_url + query_strings)
+        response = scrapers.utils.request(self.listing_base_url + query_strings, breaker=self.breaker)
         if response is None:
             print(f"PCC: request failed for award keyword '{keyword}', skipping.")
             return pd.DataFrame()
@@ -115,7 +117,9 @@ class PccScraper:
         gov_award = pd.DataFrame()
         keyword_placeholder = sl.empty()
 
-        for keyword in TITLE_KEYWORDS:
+        for keyword in cfg.TITLE_KEYWORDS:
+            if self.breaker.is_open:
+                break
             keyword_placeholder.text(f"Processing keyword: {keyword}")
 
             # ── Tender ──────────────────────────────────────────────────────
@@ -125,7 +129,7 @@ class PccScraper:
                        + "&sortCol=TENDER_NOTICE_DATE"
                        + "&timeRange=" + str(self.search_year_minguo)
                        + "&pageSize=100")
-                response = scrapers.utils.request(self.listing_base_url + tqs)
+                response = scrapers.utils.request(self.listing_base_url + tqs, breaker=self.breaker)
                 if response is None:
                     print(f"PCC: tender request failed for '{keyword}', skipping.")
                 else:
@@ -169,7 +173,9 @@ class PccScraper:
                 print(f"PCC scraper error (award, keyword='{keyword}'): {e}")
 
         # ── Company keywords (awards only) ───────────────────────────────────
-        for keyword in COMPANY_KEYWORDS:
+        for keyword in cfg.COMPANY_KEYWORDS:
+            if self.breaker.is_open:
+                break
             keyword_placeholder.text(f"Processing keyword: {keyword}")
             try:
                 aqs = ("?querySentence=" + keyword
@@ -181,5 +187,12 @@ class PccScraper:
                 gov_award = pd.concat([gov_award, df2], ignore_index=True)
             except Exception as e:
                 print(f"PCC scraper error (company award, keyword='{keyword}'): {e}")
+
+        if self.breaker.is_open:
+            msg = (f"政府採購網連續 {self.breaker.failures} 次連線失敗（{self.breaker.last_error}），"
+                   f"已跳過剩餘關鍵字")
+            print(f"PCC: {msg}")
+            self.warning = msg
+            keyword_placeholder.warning(msg)
 
         return gov_tender, gov_award
