@@ -6,7 +6,7 @@ import altair as alt
 import pandas as pd
 from datetime import datetime
 from data_processing.data_cleaner import delete_duplicates
-from data_processing import sheets_sync, score_consistency
+from data_processing import sheets_sync, score_consistency, coverage
 from scrapers.g0vScraper import G0vScraper
 from scrapers.pccScraper import PccScraper
 from scrapers import diagnostics
@@ -239,6 +239,11 @@ with tab1:
                 tenders_df["score"] = tenders_df["score"].fillna(-1).astype(int)
                 awards_df["score"]  = awards_df["score"].fillna(-1).astype(int)
 
+                # Failed bids whose tender we never saw (g0v lacks 公開取得電子報價單
+                # tender notices): likely re-tendered within days, so flag them.
+                sl.session_state["retender_watch"] = coverage.retender_watch(
+                    awards_df, [tenders_df] + _history[:1])
+
                 # ── Google Sheets push ────────────────────────────────────────
                 t_new = 0
                 a_new = 0
@@ -384,6 +389,7 @@ with tab2:
                 "決標品項:第1品項:得標廠商1:得標廠商": "得標廠商",
                 "決標資料:總決標金額": "決標金額",
                 "領投開標:截止投標": "截止投標", "採購資料:預算金額": "預算",
+                "job_number": "案號", "無法決標公告:無法決標的理由": "流標原因",
             }
 
             def _show(df, cols):
@@ -397,6 +403,17 @@ with tab2:
                            "決標品項:第1品項:得標廠商1:得標廠商", "決標資料:總決標金額", "type", "url"]
             _tender_cols = ["score", "date", "title", "keyword", "機關名稱",
                             "領投開標:截止投標", "採購資料:預算金額", "url"]
+            _watch = sl.session_state.get("retender_watch")
+            if _watch is not None and not _watch.empty:
+                _watch = _watch[_watch["score"] >= threshold]
+            if _watch is not None and not _watch.empty:
+                sl.markdown(theme.section("⚠️ 重新招標觀察", f"{len(_watch)} 筆"), unsafe_allow_html=True)
+                sl.caption("以下流標案件在資料來源中找不到招標公告：g0v 未收錄採購網「公開取得電子報價單」的招標公告，"
+                           "這類案件只會以無法決標／決標公告出現。流標後通常數日內重新招標、截止期很短"
+                           "（例：台大 1152B026 細胞成像系統 11/12 流標、11/13 重新公告、11/17 截止），"
+                           "請立即到政府電子採購網以「機關＋標案案號」查詢。")
+                _show(_watch, ["score", "date", "title", "機關名稱", "job_number",
+                               "無法決標公告:無法決標的理由", "url"])
             sl.markdown(theme.section("決標", f"符合門檻 {len(ai_awards)} 筆"), unsafe_allow_html=True)
             _show(ai_awards, _award_cols)
             sl.markdown(theme.section("招標", f"符合門檻 {len(ai_tenders)} 筆"), unsafe_allow_html=True)
