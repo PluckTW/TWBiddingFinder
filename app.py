@@ -6,7 +6,7 @@ import altair as alt
 import pandas as pd
 from datetime import datetime
 from data_processing.data_cleaner import delete_duplicates
-from data_processing import sheets_sync
+from data_processing import sheets_sync, score_consistency
 from scrapers.g0vScraper import G0vScraper
 from scrapers.pccScraper import PccScraper
 from scrapers import diagnostics
@@ -199,28 +199,35 @@ with tab1:
                 tender_titles = tenders_df["title"].tolist() if "title" in tenders_df.columns else []
                 award_titles  = awards_df["title"].tolist()  if "title" in awards_df.columns  else []
 
-                n_tender = len([t for t in tender_titles if isinstance(t, str) and t.strip()])
-                n_award  = len([t for t in award_titles  if isinstance(t, str) and t.strip()])
-                total_valid = n_tender + n_award
+                total_valid = len([t for t in tender_titles + award_titles
+                                   if isinstance(t, str) and t.strip()])
                 progress_bar = sl.progress(0.0, text="AI 評分中…")
-                _progress_state = {"base": 0}
 
-                def _update_progress(done, _total):
-                    overall = _progress_state["base"] + done
-                    frac = overall / total_valid if total_valid else 1.0
-                    progress_bar.progress(min(frac, 1.0), text=f"AI 評分中… {overall}/{total_valid}")
+                def _update_progress(done, total):
+                    frac = done / total if total else 1.0
+                    progress_bar.progress(min(frac, 1.0), text=f"AI 評分中… {done}/{total}")
 
-                tender_score = score_titles(tender_titles, progress_callback=_update_progress)
-                _progress_state["base"] = n_tender
-                award_score  = score_titles(award_titles, progress_callback=_update_progress)
+                # One call for both lists: identical titles get one score
+                all_scores = score_titles(tender_titles + award_titles, progress_callback=_update_progress)
                 progress_bar.empty()
 
-                tenders_df.insert(0, "score", tender_score)
-                awards_df.insert(0, "score", award_score)
+                tenders_df.insert(0, "score", all_scores[:len(tender_titles)])
+                awards_df.insert(0, "score", all_scores[len(tender_titles):])
+
+                # Same case (agency + job number, or agency + title) gets the
+                # highest score any of its notices got, now or in earlier runs,
+                # so a case isn't dropped at tender time and listed at award time.
+                _history = []
+                if sl.session_state["sheets_available"]:
+                    _history = [sheets_sync._tab_frame(sl.session_state["spreadsheet"], _tab)
+                                for _tab in ("Tenders_RAW", "Awards_RAW")]
+                sl.session_state["score_raised"] = score_consistency.apply_case_max(
+                    [tenders_df, awards_df], _history)
 
                 # Persist scoring outcome so it survives rerun() into Tab 2
                 # Nothing scraped means nothing to score — not a scoring failure
-                if total_valid and tenders_df["score"].isna().all() and awards_df["score"].isna().all():
+                # (judged on the model's own scores, before history fills gaps)
+                if total_valid and all(sc is None for sc in all_scores):
                     sl.session_state["score_failed"] = True
                     sl.session_state["score_diag"] = get_diagnostics()
                     sl.session_state["score_provider"] = None
@@ -324,6 +331,9 @@ with tab2:
                         "OPENAI_API_KEY / GEMINI_API_KEY / GROQ_API_KEY，且帳戶有額度。")
         elif sl.session_state.get("score_provider"):
             sl.write(f"✅ 評分模型：{sl.session_state['score_provider']}")
+        if sl.session_state.get("score_raised"):
+            sl.caption(f"🔗 {sl.session_state['score_raised']} 筆依同案（同機關＋同案號或同標題）"
+                       "其他公告的較高分數補正，避免同一案在招標時被排除、決標時才列入。")
 
         # Sheets sync result
         if sl.session_state.get("sheets_available") and "tenders_new" in sl.session_state:

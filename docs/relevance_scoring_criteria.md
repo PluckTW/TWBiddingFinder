@@ -84,6 +84,7 @@ Output ONLY a confidence score as an integer from 0 to 100, without any addition
 If the title is highly relevant, output 100.
 If the title is completely irrelevant, output 0.
 Titles unrelated to biology or instrument procurement will likely be irrelevant.
+Score every title on its own merits: the same title must always get the same score, whatever other titles appear in the list.
 
 Examples:
 - '流式細胞儀項目' → 80
@@ -109,7 +110,17 @@ Only provide a number between 0 and 100, with no explanation or symbols.
 
 ---
 
-## 四、後續篩選
+## 四、app 內的分數一致性機制（2026/11 起）
+
+LLM 對同一標題的分數不穩定（受同批其他標題影響）：歷史資料中有 21 個標題同時被評過 <70 與 ≥70，
+造成「同一案招標時被排除、決標時才列入」。app 現在：
+
+1. **同次執行去重**：招標＋決標標題合併、去除空白後每個標題只評一次，同標題必同分。
+2. **低分複評**：第一輪 <70 的標題再以 5 題一批複評，取較高分（只會調高，不會調低）。
+3. **同案取最高分**：同機關＋同案號、或同機關＋同標題，沿用本次與 Sheet 歷史中該案的最高分。
+4. 模型 temperature 設為 0；若模型以 1 起算編號，自動校正避免分數錯位。
+
+## 五、後續篩選
 
 app 內的相關門檻為 **score ≥ 70**（`app.py` 的 `ai_threshold = 70`）。
 在 Excel 中可用 `=IF(B2>=70,"相關","")` 或篩選功能，比照 app 的判定標準。
