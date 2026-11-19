@@ -6,7 +6,7 @@
 g0v 與官方開放資料都沒有收錄，只能從採購網網頁取得；而採購網會擋國外 IP，
 所以必須在公司（台灣）的電腦上執行。
 
-本程式每天 08:30 自動執行一次：
+本程式每天 10:00 自動執行一次：
 1. 到採購網查「等標期內、公開取得電子報價單、財物類」的所有招標。
 2. 用 Google Sheet「Keywords」分頁的關鍵字比對標案名稱。
 3. 命中的寫入 Google Sheet 的 `EQuote_RAW` 分頁；每次執行結果記在 `EQuoteLog` 分頁。
@@ -44,7 +44,7 @@ g0v 與官方開放資料都沒有收錄，只能從採購網網頁取得；而�
    - `proxy`：公司若需透過 proxy 上網才填，例如 `http://proxy.company.com:8080`；不需要就留空 `""`。
 4. 再以系統管理員身分執行一次 `runner\setup.bat`。它會：
    - 測試採購網與 Google Sheet 連線，並列出目前命中的標案。
-   - 測試通過才建立排程「TWBiddingFinder\EQuote」（每天 08:30，以 SYSTEM 身分執行，不需登入）。
+   - 測試通過才建立排程「TWBiddingFinder\EQuote」（每天 10:00，以 SYSTEM 身分執行，不需登入）。
 5. 看到 `[OK] Setup done.` 即完成。
 
 ### 立即手動跑一次（驗證用）

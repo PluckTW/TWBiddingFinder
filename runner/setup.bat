@@ -26,9 +26,9 @@ if errorlevel 1 (
   echo [ERROR] Connection test failed. See the message above. Task NOT scheduled.
   exit /b 1
 )
-schtasks /Create /TN "TWBiddingFinder\EQuote" /TR "\"%~dp0run_equote.bat\"" /SC DAILY /ST 08:30 /RU SYSTEM /RL HIGHEST /F
+schtasks /Create /TN "TWBiddingFinder\EQuote" /TR "\"%~dp0run_equote.bat\"" /SC DAILY /ST 10:00 /RU SYSTEM /RL HIGHEST /F
 if errorlevel 1 (
   echo [ERROR] Could not create the scheduled task. Run this file as Administrator.
   exit /b 1
 )
-echo [OK] Setup done. The job runs every day at 08:30.
+echo [OK] Setup done. The job runs every day at 10:00.
