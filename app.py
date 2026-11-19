@@ -195,6 +195,18 @@ with tab1:
                 tenders_df, awards_df = scrapeDataMerger.run_merger()
                 delete_duplicates(tenders_df, awards_df)
 
+                # 公開取得電子報價單 tenders: missing from g0v, fetched from PCC by
+                # the runner on the company machine in Taiwan (runner/README_ADMIN.md)
+                if sl.session_state["sheets_available"]:
+                    _eq, _eq_warning = sheets_sync.load_equote(
+                        sl.session_state["spreadsheet"], formatted_date, today_date)
+                    if _eq_warning:
+                        source_warnings.append(_eq_warning)
+                    if not _eq.empty:
+                        # Only columns Tenders_RAW already has, so the sheet stays aligned
+                        _eq = _eq[[c for c in _eq.columns if c in tenders_df.columns]]
+                        tenders_df = pd.concat([tenders_df, _eq], ignore_index=True)
+
                 # ── AI Score ──────────────────────────────────────────────────
                 tender_titles = tenders_df["title"].tolist() if "title" in tenders_df.columns else []
                 award_titles  = awards_df["title"].tolist()  if "title" in awards_df.columns  else []
