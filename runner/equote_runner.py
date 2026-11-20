@@ -5,6 +5,8 @@ so admins only need to look at the last row.
 
 Run:  python -m runner.equote_runner            (normal daily run)
       python -m runner.equote_runner --check    (connectivity test, writes nothing)
+      python -m runner.equote_runner --local    (scrape only: no Google key or
+                                                 config.json needed; CSVs in runner/logs)
 
 Settings: runner/config.json (copy from runner/config.example.json).
 """
@@ -85,11 +87,53 @@ def write_log(spreadsheet, status, listed=0, matched=0, new=0, message=""):
         print(f"寫入 {LOG_TAB} 失敗：{e}")
 
 
+def run_local():
+    """Scrape PCC only: no Google key, config.json optional (for its proxy).
+    Keywords come from config/config.json. Writes all rows and the keyword
+    matches to CSV files in runner/logs for checking against the website."""
+    path = os.path.join(HERE, "config.json")
+    settings = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            settings = json.load(f)
+    now = datetime.now(TAIPEI)
+    print(f"=== {now:%Y-%m-%d %H:%M} 電子報價單抓取（本機測試，不寫入 Google Sheet）===")
+    logs = os.path.join(HERE, "logs")
+    os.makedirs(logs, exist_ok=True)
+    dump = os.path.join(logs, "last_list_page.html")
+    try:
+        rows = pcc_equote.scrape(make_session(settings), today=now.date(), dump_path=dump)
+    except pcc_equote.PccBlockedError as e:
+        print(f"失敗：{e}")
+        return 1
+    except pcc_equote.PccFormatError as e:
+        print(f"失敗：{e}。原始頁面已存到 {dump}")
+        return 1
+    except requests.RequestException as e:
+        print(f"失敗：連線採購網失敗 {type(e).__name__} {e}")
+        return 1
+    matched = pcc_equote.match_keywords(rows, cfg.TITLE_KEYWORDS)
+    all_csv = os.path.join(logs, "equote_all.csv")
+    hit_csv = os.path.join(logs, "equote_matched.csv")
+    # utf-8-sig so Excel opens the Chinese text correctly
+    pd.DataFrame(rows).to_csv(all_csv, index=False, encoding="utf-8-sig")
+    pd.DataFrame(matched).to_csv(hit_csv, index=False, encoding="utf-8-sig")
+    print(f"等標期內電子報價單（財物類）{len(rows)} 筆，關鍵字命中 {len(matched)} 筆")
+    for r in matched:
+        print(f"  {r['公告日期']} 截止{r['領投開標:截止投標']} {r['機關名稱']} {r['job_number']} {r['title']}")
+    print(f"全部：{all_csv}\n命中：{hit_csv}\n原始頁面：{dump}")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true",
                         help="只測試連線（採購網與 Google Sheet），不寫入資料")
+    parser.add_argument("--local", action="store_true",
+                        help="只抓採購網，不需 Google 金鑰；結果存成 runner/logs 的 CSV")
     args = parser.parse_args()
+    if args.local:
+        return run_local()
     settings = load_settings()
     now = datetime.now(TAIPEI)
     print(f"=== {now:%Y-%m-%d %H:%M} 電子報價單抓取 {'(連線測試)' if args.check else ''} ===")

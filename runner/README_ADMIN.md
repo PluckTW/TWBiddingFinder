@@ -54,6 +54,13 @@ runner\run_equote.bat
 ```
 然後看 `runner\logs\equote.log` 最後幾行，以及 Google Sheet 的 `EQuoteLog`。
 
+### 只測試抓取（不需 Google 金鑰）
+裝好 Python 套件後即可執行，不需要 `config.json` 或金鑰；結果存成
+`runner\logs\equote_all.csv`（全部）與 `equote_matched.csv`（關鍵字命中），可用 Excel 開啟比對採購網：
+```
+.venv-runner\Scripts\python.exe -X utf8 -m runner.equote_runner --local
+```
+
 ## 常見問題
 
 | 訊息 | 原因 | 處理 |
