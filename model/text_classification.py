@@ -20,6 +20,15 @@ import streamlit as sl
 
 BATCH_SIZE = 20
 
+# Titles scoring below this in the first pass are scored again in small batches
+# and keep the higher score. In a 20-title batch full of irrelevant notices
+# (medical imaging, CCTV...) the model tends to zero out a relevant title too:
+# e.g. '高通量超高速病理切片影像掃描機租賃案' got 0 at tender time and 90 at
+# award time. A second look with few neighbours catches those; it only ever
+# raises a score, so a title can't be dropped by it.
+RESCORE_BELOW = 70
+RESCORE_BATCH_SIZE = 5
+
 # The scoring rubric, shared by every provider.
 _RUBRIC = (
     "You are a classification AI that determines the relevance of Traditional Chinese bidding titles "
@@ -29,7 +38,9 @@ _RUBRIC = (
     "BMG Labtech (PHERAstar, CLARIOstar, FLUOstar), PerkinElmer/Revvity (EnVision, VICTOR), "
     "Tecan plate readers, ZEISS cell imaging systems, Bio-Rad (ddPCR, gel imaging), Biochrom.\n"
     "Score each title from 0 to 100, where 100 = highly relevant and 0 = completely irrelevant.\n"
-    "Titles unrelated to biology or instrument procurement are likely irrelevant.\n\n"
+    "Titles unrelated to biology or instrument procurement are likely irrelevant.\n"
+    "Score every title on its own merits: the same title must always get the same score, "
+    "whatever other titles appear in the list.\n\n"
     "Calibration examples:\n"
     "- '流式細胞儀項目' -> 80\n"
     "- '超微量分光光度計壹台' -> 80\n"
@@ -191,14 +202,18 @@ def _parse_batch_scores(raw, n):
     else:
         return None
 
+    parsed = {}
     for key, value in items:
         try:
-            idx = int(key)
-            score = int(float(value))
+            parsed[int(key)] = max(0, min(100, int(float(value))))
         except (ValueError, TypeError):
             continue
-        if 0 <= idx < n:
-            scores[idx] = max(0, min(100, score))
+    # Some models number the items 1..n instead of 0..n-1; reading those as
+    # 0-based would give every title its neighbour's score.
+    offset = 1 if n and 0 not in parsed and n in parsed else 0
+    for idx, score in parsed.items():
+        if 0 <= idx - offset < n:
+            scores[idx - offset] = score
     return scores
 
 
@@ -216,14 +231,14 @@ def _score_chunk(titles, provider):
     try:
         response = client.chat.completions.create(
             model=model,
-            temperature=0.2,
+            temperature=0,
             response_format={"type": "json_object"},
             messages=messages,
         )
     except openai.BadRequestError:
         response = client.chat.completions.create(
             model=model,
-            temperature=0.2,
+            temperature=0,
             messages=messages,
         )
     raw = response.choices[0].message.content
@@ -239,7 +254,7 @@ def score_titles(titles, progress_callback=None):
     next provider is used.
 
     progress_callback, if given, is called after each batch as
-    progress_callback(done, total) where done/total count valid titles.
+    progress_callback(done, total) where done/total count distinct titles.
     """
     global _LAST_PROVIDER, _LAST_DIAGNOSTICS
     titles = list(titles)
@@ -250,9 +265,13 @@ def score_titles(titles, progress_callback=None):
     missing = [p["name"] for p in _PROVIDER_DEFS if not _secret(p["secret"])]
     _LAST_DIAGNOSTICS = {"configured": configured, "missing": missing, "errors": []}
 
-    # Only send real, non-empty string titles to the API.
-    valid = [(i, t.strip()) for i, t in enumerate(titles)
-             if isinstance(t, str) and t.strip()]
+    # Only send real, non-empty string titles to the API, each distinct title
+    # once (ignoring whitespace), so identical titles always get the same score.
+    positions = {}
+    for i, t in enumerate(titles):
+        if isinstance(t, str) and t.strip():
+            positions.setdefault(re.sub(r"\s+", "", t), (t.strip(), []))[1].append(i)
+    valid = [(idxs, t) for t, idxs in positions.values()]
     if not valid:
         return scores
 
@@ -264,43 +283,69 @@ def score_titles(titles, progress_callback=None):
         return scores
 
     dead = set()
-    for start in range(0, len(valid), BATCH_SIZE):
-        batch = valid[start:start + BATCH_SIZE]
-        batch_titles = [t for _, t in batch]
-        chunk_scores = None
 
-        for provider in providers:
-            if provider["name"] in dead:
-                continue
-            try:
-                chunk_scores = _score_chunk(batch_titles, provider)
-            except openai.OpenAIError as e:
-                # Auth/quota/connection issues persist -> stop using this provider.
-                msg = f"{provider['name']}: {e}"
-                print(f"[{provider['name']}] API error, disabling for this run: {e}")
-                _LAST_DIAGNOSTICS["errors"].append(msg)
-                dead.add(provider["name"])
-                continue
-            except Exception as e:
-                # Bad/unparseable response -> just try the next provider.
-                msg = f"{provider['name']} (unexpected): {e}"
-                print(f"[{provider['name']}] unexpected error: {e}")
-                _LAST_DIAGNOSTICS["errors"].append(msg)
-                continue
+    def run_batches(items, batch_size, report):
+        """Score items [(original positions, title)] in batches; returns
+        {item index: score}."""
+        global _LAST_PROVIDER
+        result = {}
+        for start in range(0, len(items), batch_size):
+            batch = items[start:start + batch_size]
+            batch_titles = [t for _, t in batch]
+            chunk_scores = None
 
-            if chunk_scores is not None:
-                _LAST_PROVIDER = f"{provider['name']} ({_resolve_model(provider)})"
-                break
+            for provider in providers:
+                if provider["name"] in dead:
+                    continue
+                try:
+                    chunk_scores = _score_chunk(batch_titles, provider)
+                except openai.OpenAIError as e:
+                    # Auth/quota/connection issues persist -> stop using this provider.
+                    msg = f"{provider['name']}: {e}"
+                    print(f"[{provider['name']}] API error, disabling for this run: {e}")
+                    _LAST_DIAGNOSTICS["errors"].append(msg)
+                    dead.add(provider["name"])
+                    continue
+                except Exception as e:
+                    # Bad/unparseable response -> just try the next provider.
+                    msg = f"{provider['name']} (unexpected): {e}"
+                    print(f"[{provider['name']}] unexpected error: {e}")
+                    _LAST_DIAGNOSTICS["errors"].append(msg)
+                    continue
 
-        if chunk_scores:
-            for (orig_idx, _), score in zip(batch, chunk_scores):
-                scores[orig_idx] = score
+                if chunk_scores is not None:
+                    _LAST_PROVIDER = f"{provider['name']} ({_resolve_model(provider)})"
+                    break
 
+            if chunk_scores:
+                for offset, score in enumerate(chunk_scores):
+                    if score is not None:
+                        result[start + offset] = score
+
+            if report:
+                report(min(start + len(batch), len(items)))
+        return result
+
+    def report_first(done):
         if progress_callback:
             try:
-                progress_callback(min(start + len(batch), len(valid)), len(valid))
+                progress_callback(done, len(valid))
             except Exception:
                 pass
+
+    first = run_batches(valid, BATCH_SIZE, report_first)
+
+    # Second look at the titles the first pass would exclude (see RESCORE_BELOW)
+    low = [i for i in range(len(valid)) if i in first and first[i] < RESCORE_BELOW]
+    if low:
+        second = run_batches([valid[i] for i in low], RESCORE_BATCH_SIZE, None)
+        for j, i in enumerate(low):
+            if j in second and second[j] > first[i]:
+                first[i] = second[j]
+
+    for i, score in first.items():
+        for orig_idx in valid[i][0]:
+            scores[orig_idx] = score
 
     return scores
 

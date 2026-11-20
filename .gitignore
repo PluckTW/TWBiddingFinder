@@ -3,3 +3,6 @@ config/gpt_key.txt
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
+runner/config.json
+runner/logs/
+.venv-runner/

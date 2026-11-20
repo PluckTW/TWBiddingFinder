@@ -6,7 +6,7 @@ import altair as alt
 import pandas as pd
 from datetime import datetime
 from data_processing.data_cleaner import delete_duplicates
-from data_processing import sheets_sync
+from data_processing import sheets_sync, score_consistency, coverage
 from scrapers.g0vScraper import G0vScraper
 from scrapers.pccScraper import PccScraper
 from scrapers import diagnostics
@@ -195,32 +195,51 @@ with tab1:
                 tenders_df, awards_df = scrapeDataMerger.run_merger()
                 delete_duplicates(tenders_df, awards_df)
 
+                # 公開取得電子報價單 tenders: missing from g0v, fetched from PCC by
+                # the runner on the company machine in Taiwan (runner/README_ADMIN.md)
+                if sl.session_state["sheets_available"]:
+                    _eq, _eq_warning = sheets_sync.load_equote(
+                        sl.session_state["spreadsheet"], formatted_date, today_date)
+                    if _eq_warning:
+                        source_warnings.append(_eq_warning)
+                    if not _eq.empty:
+                        # Only columns Tenders_RAW already has, so the sheet stays aligned
+                        _eq = _eq[[c for c in _eq.columns if c in tenders_df.columns]]
+                        tenders_df = pd.concat([tenders_df, _eq], ignore_index=True)
+
                 # ── AI Score ──────────────────────────────────────────────────
                 tender_titles = tenders_df["title"].tolist() if "title" in tenders_df.columns else []
                 award_titles  = awards_df["title"].tolist()  if "title" in awards_df.columns  else []
 
-                n_tender = len([t for t in tender_titles if isinstance(t, str) and t.strip()])
-                n_award  = len([t for t in award_titles  if isinstance(t, str) and t.strip()])
-                total_valid = n_tender + n_award
+                total_valid = len([t for t in tender_titles + award_titles
+                                   if isinstance(t, str) and t.strip()])
                 progress_bar = sl.progress(0.0, text="AI 評分中…")
-                _progress_state = {"base": 0}
 
-                def _update_progress(done, _total):
-                    overall = _progress_state["base"] + done
-                    frac = overall / total_valid if total_valid else 1.0
-                    progress_bar.progress(min(frac, 1.0), text=f"AI 評分中… {overall}/{total_valid}")
+                def _update_progress(done, total):
+                    frac = done / total if total else 1.0
+                    progress_bar.progress(min(frac, 1.0), text=f"AI 評分中… {done}/{total}")
 
-                tender_score = score_titles(tender_titles, progress_callback=_update_progress)
-                _progress_state["base"] = n_tender
-                award_score  = score_titles(award_titles, progress_callback=_update_progress)
+                # One call for both lists: identical titles get one score
+                all_scores = score_titles(tender_titles + award_titles, progress_callback=_update_progress)
                 progress_bar.empty()
 
-                tenders_df.insert(0, "score", tender_score)
-                awards_df.insert(0, "score", award_score)
+                tenders_df.insert(0, "score", all_scores[:len(tender_titles)])
+                awards_df.insert(0, "score", all_scores[len(tender_titles):])
+
+                # Same case (agency + job number, or agency + title) gets the
+                # highest score any of its notices got, now or in earlier runs,
+                # so a case isn't dropped at tender time and listed at award time.
+                _history = []
+                if sl.session_state["sheets_available"]:
+                    _history = [sheets_sync._tab_frame(sl.session_state["spreadsheet"], _tab)
+                                for _tab in ("Tenders_RAW", "Awards_RAW")]
+                sl.session_state["score_raised"] = score_consistency.apply_case_max(
+                    [tenders_df, awards_df], _history)
 
                 # Persist scoring outcome so it survives rerun() into Tab 2
                 # Nothing scraped means nothing to score — not a scoring failure
-                if total_valid and tenders_df["score"].isna().all() and awards_df["score"].isna().all():
+                # (judged on the model's own scores, before history fills gaps)
+                if total_valid and all(sc is None for sc in all_scores):
                     sl.session_state["score_failed"] = True
                     sl.session_state["score_diag"] = get_diagnostics()
                     sl.session_state["score_provider"] = None
@@ -231,6 +250,11 @@ with tab1:
 
                 tenders_df["score"] = tenders_df["score"].fillna(-1).astype(int)
                 awards_df["score"]  = awards_df["score"].fillna(-1).astype(int)
+
+                # Failed bids whose tender we never saw (g0v lacks 公開取得電子報價單
+                # tender notices): likely re-tendered within days, so flag them.
+                sl.session_state["retender_watch"] = coverage.retender_watch(
+                    awards_df, [tenders_df] + _history[:1])
 
                 # ── Google Sheets push ────────────────────────────────────────
                 t_new = 0
@@ -324,6 +348,9 @@ with tab2:
                         "OPENAI_API_KEY / GEMINI_API_KEY / GROQ_API_KEY，且帳戶有額度。")
         elif sl.session_state.get("score_provider"):
             sl.write(f"✅ 評分模型：{sl.session_state['score_provider']}")
+        if sl.session_state.get("score_raised"):
+            sl.caption(f"🔗 {sl.session_state['score_raised']} 筆依同案（同機關＋同案號或同標題）"
+                       "其他公告的較高分數補正，避免同一案在招標時被排除、決標時才列入。")
 
         # Sheets sync result
         if sl.session_state.get("sheets_available") and "tenders_new" in sl.session_state:
@@ -374,6 +401,7 @@ with tab2:
                 "決標品項:第1品項:得標廠商1:得標廠商": "得標廠商",
                 "決標資料:總決標金額": "決標金額",
                 "領投開標:截止投標": "截止投標", "採購資料:預算金額": "預算",
+                "job_number": "案號", "無法決標公告:無法決標的理由": "流標原因",
             }
 
             def _show(df, cols):
@@ -387,6 +415,17 @@ with tab2:
                            "決標品項:第1品項:得標廠商1:得標廠商", "決標資料:總決標金額", "type", "url"]
             _tender_cols = ["score", "date", "title", "keyword", "機關名稱",
                             "領投開標:截止投標", "採購資料:預算金額", "url"]
+            _watch = sl.session_state.get("retender_watch")
+            if _watch is not None and not _watch.empty:
+                _watch = _watch[_watch["score"] >= threshold]
+            if _watch is not None and not _watch.empty:
+                sl.markdown(theme.section("⚠️ 重新招標觀察", f"{len(_watch)} 筆"), unsafe_allow_html=True)
+                sl.caption("以下流標案件在資料來源中找不到招標公告：g0v 未收錄採購網「公開取得電子報價單」的招標公告，"
+                           "這類案件只會以無法決標／決標公告出現。流標後通常數日內重新招標、截止期很短"
+                           "（例：台大 1152B026 細胞成像系統 11/12 流標、11/13 重新公告、11/17 截止），"
+                           "請立即到政府電子採購網以「機關＋標案案號」查詢。")
+                _show(_watch, ["score", "date", "title", "機關名稱", "job_number",
+                               "無法決標公告:無法決標的理由", "url"])
             sl.markdown(theme.section("決標", f"符合門檻 {len(ai_awards)} 筆"), unsafe_allow_html=True)
             _show(ai_awards, _award_cols)
             sl.markdown(theme.section("招標", f"符合門檻 {len(ai_tenders)} 筆"), unsafe_allow_html=True)

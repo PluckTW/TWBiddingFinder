@@ -348,3 +348,32 @@ def load_overview(spreadsheet, company_keywords, today):
         "top_orgs": top_orgs,
         "recent": recent[:60],
     }
+
+
+# ── E-quotation tenders from the Taiwan-hosted runner ────────────────────────
+
+def load_equote(spreadsheet, start_date, today):
+    """Rows of EQuote_RAW (written by runner/equote_runner.py on a machine in
+    Taiwan) announced on/after start_date (YYYYMMDD int), plus a warning when
+    that runner looks broken. Returns (DataFrame, warning or None)."""
+    raw = _tab_frame(spreadsheet, "EQuote_RAW")
+    log = _tab_frame(spreadsheet, "EQuoteLog")
+
+    warning = None
+    if log.empty:
+        warning = "電子報價單抓取程式（公司主機）尚無執行紀錄，「公開取得電子報價單」招標目前看不到。"
+    else:
+        last = log.iloc[-1]
+        last_at = pd.to_datetime(last.get("run_at"), errors="coerce")
+        if str(last.get("status")) != "OK":
+            warning = f"電子報價單抓取程式最近一次執行失敗（{last.get('run_at')}）：{last.get('message')}"
+        elif pd.isna(last_at) or (pd.Timestamp(today) - last_at.tz_localize(None).normalize()).days > 2:
+            warning = f"電子報價單抓取程式已超過 2 天沒有執行（最後一次：{last.get('run_at')}），請通知 admin。"
+
+    if raw.empty:
+        return pd.DataFrame(), warning
+    raw = raw.drop(columns=[c for c in ("run_id", "appended_at", "tags", "user_notes") if c in raw.columns])
+    raw["date"] = pd.to_numeric(raw["date"], errors="coerce")
+    raw = raw[raw["date"] >= start_date].copy()
+    raw["date"] = raw["date"].astype("int64")
+    return raw, warning

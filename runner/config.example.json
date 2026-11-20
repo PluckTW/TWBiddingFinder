@@ -1,0 +1,5 @@
+{
+  "google_sheet_id": "請填入 Google Sheet ID（網址 /d/ 與 /edit 之間那段）",
+  "service_account_file": "C:\\TWBiddingFinder-secrets\\service_account.json",
+  "proxy": ""
+}
